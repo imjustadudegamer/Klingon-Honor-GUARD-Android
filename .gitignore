@@ -1,0 +1,28 @@
+# --- Local / machine-specific (never commit) ---
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# --- Gradle / Android build outputs ---
+.gradle/
+build/
+**/build/
+**/.cxx/
+*.apk
+*.aab
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+
+# --- Editor / OS cruft ---
+*.bak
+*.bak_*
+*-backup
+*.rev[0-9]*
+*.orig
+*~
+.DS_Store
+Thumbs.db
