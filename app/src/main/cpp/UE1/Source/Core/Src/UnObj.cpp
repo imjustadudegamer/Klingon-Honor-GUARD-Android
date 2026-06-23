@@ -2295,19 +2295,24 @@ UBOOL FObjectManager::SavePackage( UObject* InParent, UObject* Base, DWORD TopLe
 		// Build NameMap.
 		guard(BuildNameMap);
 		Linker->Summary.NameOffset = Linker->Tell();
-		// [KHG] UNREAL_ANDROID_SAVE_NAME_OVERFLOW_V131: FName indices are 16-bit (enum EName : _WORD). A long
-		// session whose GLOBAL name table grew past 65536 made the original `FName Name((EName)i)` TRUNCATE i
-		// to 16 bits, so `Name.GetFlags()` re-looked-up a WRONG (often freed/null) slot and ABORTED the SAVE
-		// (debug assert "Names(Index)" at UnName.h:96, seen ~7min into combat). Cap at the 16-bit range and
-		// read RF_TagExp straight off the entry pointer we just verified non-null — no truncating re-lookup.
-		INT MaxNames = FName::GetMaxNames();
-		if( MaxNames > 65536 )
-			MaxNames = 65536;
+		// [KHG] UNREAL_ANDROID_SAVE_NAME_OVERFLOW_V132 — DURABLE FIX (supersedes the V131 cap).
+		// FName::Index is a 32-bit INT, but the `FName((EName)i)` ctor (EName is _WORD) TRUNCATES i to 16
+		// bits. A long session grows the GLOBAL name table past 65536; the original UE1 loop then built
+		// NameMap entries with truncated indices (wrong/null slot -> save aborted). V131 "fixed" the crash
+		// by CAPPING the loop at 65536 — but that SILENTLY DROPS every tagged name living at index >=65536
+		// from the NameMap. When a map/package name (e.g. a level loaded LATE in a hub session) sits above
+		// 65536, the save is written WITHOUT its own level reference and reloads to the intro (verified:
+		// a long-session save was missing its 'Klingon_03' map name; short-session saves were intact).
+		// Fix: iterate the WHOLE table and build each tagged FName from its (unique, interned) string, which
+		// carries the correct 32-bit index via the hash lookup — no cap, no truncation. The NameMap holds
+		// only the small TAGGED set, and NameIndices below is already sized to GetMaxNames(), so the full
+		// 32-bit range serializes correctly. Identical to the old behaviour for tables < 65536.
+		const INT MaxNames = FName::GetMaxNames();
 		for( int i=0; i<MaxNames; i++ )
 		{
 			FNameEntry* NameEntry = FName::GetEntry(i);
 			if( NameEntry && (NameEntry->Flags & RF_TagExp) )
-				Linker->NameMap.AddItem( FName( (EName)i ) );
+				Linker->NameMap.AddItem( FName( NameEntry->Name, FNAME_Find ) );
 		}
 		Linker->Summary.NameCount = Linker->NameMap.Num();
 		unguard;
