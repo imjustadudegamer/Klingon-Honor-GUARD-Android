@@ -106,8 +106,7 @@ GameRenderDevice=VulkanDrv.VulkanRenderDevice
 WindowedRenderDevice=VulkanDrv.VulkanRenderDevice
 ```
 
-The OpenGL ES device (`NOpenGLESDrv.NOpenGLESRenderDevice`) still exists as a fallback, but the
-Vulkan device is the supported path.
+Vulkan is the only renderer in this port; there is no OpenGL ES path.
 
 ### 4. Launch
 
