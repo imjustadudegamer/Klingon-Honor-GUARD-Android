@@ -740,6 +740,8 @@ static UBOOL UE1AndroidIsHudConfigKey( const char* Key )
 
 static const char* UE1AndroidHudConfigSections[] =
 {
+	"Klingons.KlingonHUD",
+	"Klingons.KlingonHUDIntroNull",
 	"Unreal.UnrealHUD",
 	"UnrealI.UnrealHUD",
 	"UnrealShare.UnrealHUD",
@@ -1921,15 +1923,6 @@ UClass* FObjectManager::LoadClass( UClass* BaseClass, UObject* InParent, const c
 		UClass* Class = (UClass*)GObj.LoadObject( UClass::StaticClass, InParent, InName, Filename, LoadFlags | LOAD_Throw, Sandbox );
 		if( Class && !Class->IsChildOf(BaseClass) )
 		{
-			// [KHG-DIAG] Dump the loaded class's super chain so we can see why the
-			// IsChildOf(BaseClass) test fails. Use GetName() (safe) not GetFullName().
-			debugf( NAME_Warning, "[KHG-DIAG] LoadClassMismatch: InName='%s' Loaded='%s' Base='%s' BasePtr=%p",
-				InName ? InName : "<null>",
-				Class->GetName(),
-				BaseClass ? BaseClass->GetName() : "<null>",
-				(void*)BaseClass );
-			for( UClass* C = Class; C; C = C->GetSuperClass() )
-				debugf( NAME_Warning, "[KHG-DIAG]   super: '%s' ptr=%p", C->GetName(), (void*)C );
 			// Safe throw (avoid the localized format whose %s count may mismatch).
 			appThrowf( "LoadClassMismatch: %s is not a child of %s", Class->GetName(), BaseClass ? BaseClass->GetName() : "<null>" );
 		}
@@ -2295,18 +2288,7 @@ UBOOL FObjectManager::SavePackage( UObject* InParent, UObject* Base, DWORD TopLe
 		// Build NameMap.
 		guard(BuildNameMap);
 		Linker->Summary.NameOffset = Linker->Tell();
-		// [KHG] UNREAL_ANDROID_SAVE_NAME_OVERFLOW_V132 — DURABLE FIX (supersedes the V131 cap).
-		// FName::Index is a 32-bit INT, but the `FName((EName)i)` ctor (EName is _WORD) TRUNCATES i to 16
-		// bits. A long session grows the GLOBAL name table past 65536; the original UE1 loop then built
-		// NameMap entries with truncated indices (wrong/null slot -> save aborted). V131 "fixed" the crash
-		// by CAPPING the loop at 65536 — but that SILENTLY DROPS every tagged name living at index >=65536
-		// from the NameMap. When a map/package name (e.g. a level loaded LATE in a hub session) sits above
-		// 65536, the save is written WITHOUT its own level reference and reloads to the intro (verified:
-		// a long-session save was missing its 'Klingon_03' map name; short-session saves were intact).
-		// Fix: iterate the WHOLE table and build each tagged FName from its (unique, interned) string, which
-		// carries the correct 32-bit index via the hash lookup — no cap, no truncation. The NameMap holds
-		// only the small TAGGED set, and NameIndices below is already sized to GetMaxNames(), so the full
-		// 32-bit range serializes correctly. Identical to the old behaviour for tables < 65536.
+		// [KHG] UNREAL_ANDROID_SAVE_NAME_OVERFLOW_V132 — durable fix (supersedes V131's cap): the FName((EName)i) ctor truncates the 32-bit index to 16 bits, so tables grown past 65536 in long sessions corrupted/dropped tagged names from the NameMap; instead iterate the whole table and build each tagged FName from its interned string (correct 32-bit index via hash, no cap, no truncation).
 		const INT MaxNames = FName::GetMaxNames();
 		for( int i=0; i<MaxNames; i++ )
 		{

@@ -590,11 +590,7 @@ void UCanvas::execDrawText( FFrame& Stack, BYTE*& Result )
 }
 AUTOREGISTER_INTRINSIC( UCanvas, 465, execDrawText );
 
-// [KHG] build-219 Canvas.StrLen at intrinsic index 467 (text measure native).
-// The modern engine has the UCanvas::StrLen C++ helper but never exposed it as a
-// script native; KHG's HUD/menu code (e.g. KlingonMenu.DrawTitle) calls it.
-// NOTE: This file is overlay-managed (src/main/ue1_patch_overlay) and is copied
-// over the build tree every build, so edits MUST live here, not in cpp/UE1.
+// [KHG] build-219 Canvas.StrLen text-measure native at intrinsic index 467: exposes the existing UCanvas::StrLen C++ helper to script for KHG HUD/menu code (e.g. KlingonMenu.DrawTitle). NOTE: overlay-managed (src/main/ue1_patch_overlay), copied over the build tree every build, so edits MUST live here.
 void UCanvas::execStrLen( FFrame& Stack, BYTE*& Result )
 {
 	guard(UCanvas::execStrLen);
@@ -641,15 +637,7 @@ void UCanvas::execDrawTile( FFrame& Stack, BYTE*& Result )
         AndroidDrawXL *= AndroidUIScale;
         AndroidDrawYL *= AndroidUIScale;
 
-        // [KHG] Edge-snap to kill the bottom/right "sliver". KHG's menu/HUD computes tile sizes and
-        // positions as `local int` in UnrealScript (e.g. KlingonMenu: TU = 320 * XRatio), so each
-        // coordinate is TRUNCATED. At the native 640x480 the per-axis ratio is 1.0 and nothing is
-        // lost, but our scaled logical canvas (Frame/UIScale) makes the ratios fractional, and the
-        // truncation accumulates across the background grid — leaving the right/bottom edges a few
-        // pixels short of the screen, exposing the 3D rendered behind. The renderer maps the canvas
-        // 1:1 to the frame, so we compensate here: a SPANNING background/border tile whose far edge
-        // lands within one truncation-band of the screen edge is stretched out to that exact edge.
-        // Small UI elements (icons, glyphs, numbers) never satisfy the span test, so they're untouched.
+        // [KHG] Edge-snap to kill the bottom/right "sliver": KHG's UnrealScript truncates int tile coords, and the scaled logical canvas (UIScale) makes ratios fractional so truncation leaves edges short of the screen exposing the 3D behind; stretch a SPANNING background/border tile whose far edge lands within one truncation-band to the exact screen edge (small UI elements fail the span test, untouched).
         const FLOAT SnapBand = 2.0f * AndroidUIScale + 1.0f; // max truncation loss ~= a couple logical px
         if( AndroidDrawYL > Frame->FY * 0.15f )              // tall enough => vertical background/border
         {

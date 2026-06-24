@@ -232,11 +232,7 @@ void RenderPassManager::CreatePipelines()
 		builder.AddColorBlendAttachment(ColorBlendAttachmentBuilder().BlendMode(VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA).Create());
 		builder.AddColorBlendAttachment(ColorBlendAttachmentBuilder().Create());
 
-		// [KHG] Depth TEST but do NOT WRITE. Draw2DPoint is a 2D overlay (e.g. the full-screen black
-		// backdrop the FMV present paints via Draw2DPoint at MinDepth=0.0). With depth-write on it stamped
-		// window-depth 0.0 across the screen, and the FMV tile (Scene pipeline, MinDepth=0.1) then failed
-		// the LEQUAL test (0.1 <= 0.0 == false) and was discarded -> FMV showed only the black backdrop.
-		// Not writing depth lets the backdrop cover everything (test passes at 0.0) without blocking tiles.
+		// [KHG] Depth TEST but no WRITE: Draw2DPoint 2D overlays (e.g. the FMV black backdrop at MinDepth=0.0) would otherwise stamp depth 0.0 screen-wide and reject the FMV tile (MinDepth=0.1) via LEQUAL; not writing depth lets the backdrop cover without blocking tiles.
 		builder.DepthStencilEnable(true, false, false);
 		builder.RasterizationSamples(renderer->Textures->Scene->SceneSamples);
 		builder.DebugName(debugName);

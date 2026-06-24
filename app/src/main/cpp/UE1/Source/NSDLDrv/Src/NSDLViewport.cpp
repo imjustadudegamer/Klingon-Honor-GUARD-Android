@@ -306,10 +306,7 @@ static void UE1AndroidTouchDirectSemanticPressPreserveV139( UNSDLViewport* Viewp
 static void UE1AndroidNativeDirectPressMappedV123( UNSDLViewport* Viewport, INT FriendlyKey, INT FallbackKey, UBOOL& OldState, INT& OldKey, UBOOL NewState )
 {
 	// UNREAL_ANDROID_CONTROLLER_CUSTOMIZE_FIX_V123
-	// Keep the reliable UT99-like digital Direct mode, but respect user remaps.
-	// Example: if the user captures left-stick-up for MoveForward, Unreal stores
-	// UnknownDA/LJoyUp=MoveForward and removes W=MoveForward. Sending W would then
-	// do nothing. Sending LJoyUp keeps full-speed movement and the custom binding.
+	// Keep UT99-like digital Direct mode but respect user remaps: e.g. if left-stick-up is captured for MoveForward, Unreal stores LJoyUp=MoveForward and drops W, so sending LJoyUp (not W) keeps full-speed movement and the custom binding.
 	if( !Viewport )
 		return;
 
@@ -649,8 +646,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nat
 static void UE1AndroidTouchLookPushUT99V131( FLOAT X, FLOAT Y )
 {
 	// UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131
-	// UT99 import: right display half is relative FPS swipe-look.  Java sends
-	// tiny per-move deltas; native accumulates them and TickInput consumes once.
+	// UT99 import: right display half is relative FPS swipe-look; Java sends tiny per-move deltas, native accumulates them and TickInput consumes once.
 	SDL_mutex* Mutex = UE1AndroidNativeControllerMutex();
 	if( Mutex )
 		SDL_LockMutex( Mutex );
@@ -1957,11 +1953,7 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 	}
 
 #if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
-	// [KHG] UNREAL_ANDROID_VULKAN_ONLY_WINDOW_V1: Vulkan-only build. FORCE every real (non-temporary)
-	// window to be a Vulkan window and NEVER a GL one. A GL window's EGL surface connects the shared
-	// ANativeWindow, which then makes vkCreateAndroidSurfaceKHR fail VK_ERROR_NATIVE_WINDOW_IN_USE_KHR.
-	// (A second OpenWindow call — e.g. an engine fallback that re-reads the device as GLES — was
-	// creating exactly such a GL window and blocking the Vulkan surface.)
+	// [KHG] UNREAL_ANDROID_VULKAN_ONLY_WINDOW_V1: force every real (non-temporary) window to Vulkan, never GL, since a GL window's EGL surface connects the shared ANativeWindow and makes vkCreateAndroidSurfaceKHR fail VK_ERROR_NATIVE_WINDOW_IN_USE_KHR (a second OpenWindow re-reading the device as GLES was doing exactly this).
 	if( !Temporary )
 	{
 		DoVulkan = 1;
@@ -1969,10 +1961,7 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 	}
 #endif
 
-	// [KHG] Vulkan-only build: the VulkanDrv render device owns the VkSurface/swapchain/present. We must
-	// NOT create a GL context OR an SDL_Renderer (SDL_CreateRenderer uses GLES on Android, and that GL
-	// context fights the Vulkan presentation on the shared ANativeWindow -> the "renders then garbles"
-	// corruption). All GL paths below are gated off for Vulkan windows.
+	// [KHG] Vulkan-only build: VulkanDrv owns the VkSurface/swapchain/present, so create no GL context or SDL_Renderer (SDL_CreateRenderer uses GLES, whose GL context fights Vulkan present on the shared ANativeWindow -> "renders then garbles" corruption); all GL paths below are gated off for Vulkan windows.
 	IsVulkan = DoVulkan;
 
 	// User window of launcher if no parent window was specified.
@@ -2033,11 +2022,7 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 #endif
 			SDL_GL_SetAttribute( SDL_GL_CONTEXT_PROFILE_MASK, GLProfile );
 
-			// [KHG] UNREAL_ANDROID_DEPTH24_V1: request a 24-bit depth buffer. SDL defaults
-			// SDL_GL_DEPTH_SIZE to 16, and the scene projection uses a near=1 / far=65336 frustum
-			// (SetSceneNode), so a 16-bit depth buffer z-fights badly -> coplanar/near-coplanar BSP
-			// faces lose the LEQUAL depth test in patches and appear to vanish/flicker as the camera
-			// pans (the intro fly-through symptom). 24-bit depth (standard on Adreno/Mali) fixes it.
+			// [KHG] UNREAL_ANDROID_DEPTH24_V1: request 24-bit depth; SDL defaults to 16, which z-fights badly against the near=1/far=65336 frustum (SetSceneNode) so coplanar BSP faces flicker/vanish as the camera pans (intro fly-through symptom). 24-bit (standard on Adreno/Mali) fixes it.
 			SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
 			SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 0 );
 		}
@@ -2085,16 +2070,10 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 #endif
 
 		// Create or update the window.
-		debugf( NAME_Log, "[KHG-VKWIN] DoOpenGL=%i DoVulkan=%i Flags=0x%08x hWndPre=%i", (INT)DoOpenGL, (INT)DoVulkan, (unsigned)Flags, hWnd?1:0 );
 		if( !hWnd )
 		{
 			// Creating new viewport.
 			hWnd = SDL_CreateWindow( "", OpenX, OpenY, NewX, NewY, Flags );
-			if( hWnd )
-				debugf( NAME_Log, "[KHG-VKWIN] created; windowFlags=0x%08x VULKAN=%i OPENGL=%i",
-					(unsigned)SDL_GetWindowFlags(hWnd),
-					!!(SDL_GetWindowFlags(hWnd)&SDL_WINDOW_VULKAN),
-					!!(SDL_GetWindowFlags(hWnd)&SDL_WINDOW_OPENGL) );
 			if( !hWnd && DoOpenGL )
 			{
 				// Try without GL.
@@ -2126,9 +2105,7 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 		// Create the presentation context for the render device.
 		if( IsVulkan )
 		{
-			// [KHG] Vulkan: the VulkanDrv owns the surface, swapchain and present. Create NOTHING here —
-			// no GL context, no SDL_Renderer (SDL_CreateRenderer = GLES on Android, which corrupts the
-			// Vulkan presentation on the shared ANativeWindow). ColorBytes is set by the device.
+			// [KHG] Vulkan: VulkanDrv owns surface/swapchain/present, so create nothing here (no GL context, no SDL_Renderer = GLES which corrupts Vulkan present on the shared ANativeWindow); ColorBytes is set by the device.
 			GLCtx = NULL;
 			SDLRen = NULL;
 			SDLTex = NULL;
@@ -2639,12 +2616,7 @@ UBOOL UNSDLViewport::TickInput()
 		GAndroidNativeDirectResetPending = 0;
 	}
 	// ANDROID_RIGHT_STICK_FRAMEPACED_LOOK_V121
-	// UT99 keeps right-stick looking stable by storing stick state and emitting one
-	// mouse-look delta per TickInput(), not by tying the delta to Android MotionEvent
-	// timing or the current render-frame DeltaTime.  Unreal's older right-stick path
-	// multiplied mouse-look by DeltaTime; tiny frame-time variations showed up as
-	// visible world jitter while rotating.  These locals collect the already
-	// deadzoned/smoothed right-stick state and emit it once near the end of TickInput.
+	// UT99-style: store right-stick state and emit one mouse-look delta per TickInput() rather than scaling by DeltaTime/MotionEvent timing (which caused visible jitter while rotating); these locals collect the deadzoned/smoothed state and emit it once near the end of TickInput.
 	FLOAT AndroidFramePacedRightLookX = 0.0f;
 	FLOAT AndroidFramePacedRightLookY = 0.0f;
 	UBOOL bAndroidFramePacedRightLookX = 0;
@@ -2675,17 +2647,13 @@ UBOOL UNSDLViewport::TickInput()
 
 		if( bAndroidNativeNormalMenu && !GAndroidNativeControllerWasInNormalMenu )
 		{
-			// When entering normal menus, discard held native gameplay state.
-			// Menu input is handled as short taps below, so stale press/release pairs
-			// cannot make the next menu button require a second physical press.
+			// Entering normal menus: discard held native gameplay state so stale press/release pairs don't make the next menu button (handled as short taps below) need a second physical press.
 			UE1AndroidNativeControllerResetState(); // ANDROID_CONTROLLER_NATIVE_MENU_TAP_V93
 			appMemset( JoyAxis, 0, sizeof(JoyAxis) );
 		}
 		if( bAndroidNativeKeyMenuing && !GAndroidNativeControllerWasInKeyMenuing )
 		{
-			// Entering Customize Controls: the DPad/stick/confirm input used to select
-			// the row can still be present in Android's motion stream. Do not let that
-			// stale navigation input become the new binding.
+			// Entering Customize Controls: clear stale DPad/stick/confirm navigation input still in Android's motion stream so it can't become the new binding.
 			UE1AndroidNativeControllerResetState(); // ANDROID_CONTROLLER_KEYMENUING_DEDUP_V93
 			appMemset( JoyAxis, 0, sizeof(JoyAxis) );
 			GAndroidNativeKeyMenuingAxisArmed = 1;
@@ -3127,10 +3095,7 @@ UBOOL UNSDLViewport::TickInput()
 				if( bAndroidNativeDirectInput )
 				{
 					// UNREAL_ANDROID_CONTROLLER_DIRECT_V122
-					// Match the robust UT99 approach for gameplay: left stick becomes
-					// normal keyboard movement at a clear threshold, and triggers become
-					// mouse buttons. This bypasses weak JoyAxis scale/config problems and
-					// makes full-speed run/strafe consistent across Retroid, OUYA and pads.
+					// UT99-style gameplay: left stick -> keyboard movement at a clear threshold, triggers -> mouse buttons; bypasses weak JoyAxis scale/config so full-speed run/strafe is consistent across Retroid, OUYA and pads.
 					const INT MovePressThreshold = (INT)( 0.35f * 32767.0f );
 					const INT MoveReleaseThreshold = (INT)( 0.25f * 32767.0f );
 					const INT TriggerPressThreshold = JoyAxisPressThreshold;
@@ -3373,9 +3338,7 @@ UBOOL UNSDLViewport::TickInput()
 			: ( ( Client ? Client->ScaleRUV : 100.0f ) * JoyAxisDefaultScale[SDL_CONTROLLER_AXIS_RIGHTY] * FixedLookFrame * NativeRightStickScale * MouseFactor );
 
 		const FLOAT DX = Clamp( AndroidFramePacedRightLookX * LookScaleX, -180.0f, 180.0f );
-		// [KHG] Modern twin-stick convention: right stick up = look up. Android AXIS_RZ
-		// (and SDL RIGHTY) report +ve when the stick is pulled DOWN, so negate Y to match
-		// the (already-correct) touch-look path and standard controller-shooter feel.
+		// [KHG] Twin-stick convention (right stick up = look up): Android AXIS_RZ / SDL RIGHTY report +ve pulled DOWN, so negate Y to match the touch-look path and standard controller-shooter feel.
 		const FLOAT DY = Clamp( -AndroidFramePacedRightLookY * LookScaleY, -140.0f, 140.0f );
 		if( Abs(DX) > 0.0001f )
 			CauseInputEvent( IK_MouseX, IST_Axis, DX );
@@ -3385,8 +3348,7 @@ UBOOL UNSDLViewport::TickInput()
 #endif
 
 	// UNREAL_ANDROID_TOUCH_OVERLAY_V125:
-	// Consume relative swipe look after the physical right-stick path. Java v131
-	// only sends right-half look outside menus; native consumes every queued swipe.
+	// Consume relative swipe-look after the physical right-stick path (Java v131 only sends right-half look outside menus; native consumes every queued swipe).
 	{
 		FLOAT TouchLookX = 0.0f;
 		FLOAT TouchLookY = 0.0f;
@@ -3403,9 +3365,7 @@ UBOOL UNSDLViewport::TickInput()
 		if( TouchLookX != 0.0f || TouchLookY != 0.0f )
 		{
 			// UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131:
-			// Match the proven UT99 native side exactly: relative swipe units are
-			// converted to MouseX/MouseY once and then cleared.  Do not treat this
-			// as a held virtual right-stick, and do not keep rotating after movement stops.
+			// UT99-style: convert relative swipe units to MouseX/MouseY once then clear; not a held virtual right-stick, so rotation stops when the swipe stops.
 			const FLOAT DX = Clamp( TouchLookX * 42.0f, -180.0f, 180.0f );
 			const FLOAT DY = Clamp( -TouchLookY * 30.0f, -140.0f, 140.0f );
 			if( CurTime >= GAndroidTouchLookNextLogV131 )
@@ -3428,8 +3388,7 @@ UBOOL UNSDLViewport::TickInput()
 }
 
 #if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
-// Clean v83: cosmetic controller names only. This does not change SDL event
-// handling, axis speed, default bindings, or controller backend logic.
+// Clean v83: cosmetic controller names only; no change to SDL event handling, axis speed, default bindings, or controller backend logic.
 static INT GAndroidCleanLastKeyNameQueryKey = -1;
 static INT GAndroidCleanPendingCapturedKeyV93 = -1; // ANDROID_CONTROLLER_KEYMENUING_DEDUP_V93
 static UBOOL GAndroidCleanFriendlyAliasScrubDoneV93 = 0; // ANDROID_CONTROLLER_KEYMENUING_DEDUP_V93
@@ -3961,26 +3920,14 @@ UBOOL UNSDLViewport::Exec( const char* Cmd, FOutputDevice* Out )
 	UE1AndroidCleanScrubFriendlyAliasDuplicatesV92( Input );
 	UE1AndroidCleanPatchKeyboardMenuNextWeaponV86( this );
 
-	// [KHG] PlayAVI: KHG's UnrealScript triggers cutscenes via ConsoleCommand("playavi
-	// <f1> <flag1> ... <f5> <flag5>"), originally serviced by Windows VFW code in the desktop build.
-	// Replicate the original parse (up to 5 file/flag pairs; "None" = empty slot) and play
-	// each named clip from the System dir on-device via the FFmpeg FMV player. The game loop
-	// is paused for the duration (UE1PlayFMV runs its own blocking present/audio loop), then
-	// resumes. The Y/C flags differentiate the DECORATED-FRAME presentation: the ornate Klingon
-	// console frame is NOT in the content clip — it is a separate video (buildup.avi assembles it,
-	// breakdn.avi removes it) and the content clip composites INTO its hex window. The original
-	// auto-played buffer/buildup/breakdn around any Y/C clip. We reproduce that: Y => buildup ->
-	// (content composited) -> breakdn; C => content composited onto the current frame (continuation);
-	// N/T/None => plain full-screen playback.
+	// [KHG] PlayAVI: implements for KHG's ConsoleCommand("playavi <f1> <flag1> ... <f5> <flag5>"); parse up to 5 file/flag pairs ("None"=empty) and play each System-dir clip via the FFmpeg FMV player (blocking, game loop paused then resumed). Y/C flags drive the decorated console frame (a separate buildup.avi/breakdn.avi the content composites into): Y => buildup->content->breakdn, C => content composited onto the current frame (continuation), N/T/None => plain full-screen.
 	{
 		const char* AviCmd = Cmd;
 		if( ParseCommand( &AviCmd, "PlayAVI" ) )
 		{
 			const char* Base = appBaseDir(); // e.g. <root>/System/
 			UEngine* Eng = Client ? Client->Engine : NULL;
-			// Play the active clip to completion (blocking): each frame advance decode (audio =
-			// master clock) and render one engine frame; UGameEngine::Draw calls UE1FMVDrawActiveFrame
-			// (which composites into the console frame when SetComposite is on). Ends on EOF/skip.
+			// Play the active clip to completion (blocking): each advance decodes (audio = master clock) and renders one engine frame; UGameEngine::Draw composites into the console frame when SetComposite is on. Ends on EOF/skip.
 			#define KHG_FMV_PLAY_LOOP() do { while( UE1FMVAdvance() ) { if( Eng ) Eng->Draw( this, NULL, NULL ); SDL_Delay( 2 ); } } while(0)
 			for( INT i = 0; i < 5; ++i )
 			{
@@ -4007,7 +3954,6 @@ UBOOL UNSDLViewport::Exec( const char* Cmd, FOutputDevice* Out )
 				if( bFramed )
 					UE1FMVSetComposite( 1 );
 				appSprintf( Path, "%s%s", Base ? Base : "", File );
-				debugf( NAME_Log, "[KHG] playavi -> %s (flag='%s' framed=%i)", Path, Flag, (INT)bFramed );
 				if( UE1FMVOpen( Path, hWnd ) ) { KHG_FMV_PLAY_LOOP(); UE1FMVClose(); }
 				if( bFramed )
 					UE1FMVSetComposite( 0 );

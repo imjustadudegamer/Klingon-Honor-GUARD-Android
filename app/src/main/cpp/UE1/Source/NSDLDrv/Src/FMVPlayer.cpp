@@ -28,16 +28,13 @@ extern "C" {
 
 #include "FMVPlayer.h"
 
-#define FMV_LOG(...) ((void)0)   // [KHG] diagnostic logging pulled (was KHG_FMV per-frame spam)
 #define FMV_ERR(...) __android_log_print( ANDROID_LOG_ERROR, "KHG_FMV", __VA_ARGS__ )   // keep real failures
 
 #define ARRAY_COUNT_FMV 48   // decoded-video frame-queue capacity (must match FMVState::vq[] size)
 
 namespace {
 
-// [KHG] The FMV is presented entirely through the Vulkan render device (UGameEngine::Draw ->
-// RenDev->DrawTile, fed by the CPU buffers G.rgba and gOverlayRGBA). The old GLES2 blitter/composite
-// path has been removed as part of the OpenGL teardown — decode stays, present is Vulkan-only.
+// [KHG] FMV present is Vulkan-only (UGameEngine::Draw -> RenDev->DrawTile, fed by CPU buffers G.rgba/gOverlayRGBA); the GLES2 blitter/composite path was removed in the OpenGL teardown, decode stays.
 
 // ---- single active clip --------------------------------------------------------------
 
@@ -131,19 +128,14 @@ static bool PollSkip()
 		switch( ev.type )
 		{
 			case SDL_QUIT: quit=true; break;
-			// [KHG] Skip only on the Esc-equivalent: keyboard Esc, or the controller START button.
-			// (The Thor's native-direct gamepad START is handled via the seq bridge below; this case
-			// also covers any controller SDL delivers as a real SDL_CONTROLLERBUTTON.)
+			// [KHG] Skip on Esc-equivalent only: keyboard Esc or controller START (native-direct gamepad START goes via the seq bridge below; this covers any controller SDL delivers as a real SDL_CONTROLLERBUTTON).
 			case SDL_KEYDOWN:
 				if( ev.key.keysym.sym == SDLK_ESCAPE ) skip=true;
 				break;
 			case SDL_CONTROLLERBUTTONDOWN:
 				if( ev.cbutton.button == SDL_CONTROLLER_BUTTON_START ) skip=true;
 				break;
-			// [KHG] Tap / click to skip. A screen tap is the natural way to dismiss a cutscene on a
-			// touch device, so honour SDL_FINGERDOWN (real touch) and SDL_MOUSEBUTTONDOWN (mouse, plus
-			// any touch SDL synthesises as a click). Still gated by the kSkipGraceMs grace window below,
-			// so the tap that launched the app / kicked off the intro cannot instantly skip the clip.
+			// [KHG] Tap/click to skip: honour SDL_FINGERDOWN (touch) and SDL_MOUSEBUTTONDOWN (mouse/synthesised click), still gated by the kSkipGraceMs window so the launching tap can't instantly skip the clip.
 			case SDL_FINGERDOWN:
 			case SDL_MOUSEBUTTONDOWN:
 				skip=true;
@@ -275,19 +267,12 @@ extern "C" int UE1FMVShowStill( const unsigned char* bgra, int w, int h, double 
 	SDL_FlushEvents( SDL_FIRSTEVENT, SDL_LASTEVENT );
 	G.startTicks = SDL_GetTicks();
 	G.active = true;
-	FMV_LOG( "splash still %dx%d for %.1fs", w, h, gStillSeconds );
 	return 1;
 }
 
-// Device-agnostic present hook: expose the current decoded frame (BGRA8, top-down) so the engine can
-// blit it through RenDev->DrawTile (works on Vulkan, which has no GL context). Returns 1 if a frame is
-// available. Buffer is valid until the next UE1FMVAdvance / UE1FMVClose.
+// Device-agnostic present hook: expose the current decoded frame (BGRA8, top-down) for RenDev->DrawTile (works on Vulkan, no GL context); returns 1 if available, buffer valid until the next UE1FMVAdvance/UE1FMVClose.
 //
-// [KHG] Composite (framed Y/C) clips are NOT cut here. The content is presented FULL/opaque and the
-// retained console-frame overlay (gOverlayRGBA) — whose central window was flood-filled to alpha 0 in
-// BakeWindowAlpha — is drawn masked ON TOP, so the overlay's exact, measured window does ALL the masking.
-// (The old hardcoded kHexX/kHexY polygon cut here was redundant with that window, and when the two shapes
-// disagreed it produced the off-center character / black-ring-at-the-window-edge artifacts — removed.)
+// [KHG] Composite (framed Y/C) clips are NOT cut here: content is presented full/opaque and the retained console-frame overlay (gOverlayRGBA, window flood-filled to alpha 0 in BakeWindowAlpha) is drawn masked on top so its measured window does all masking; the old hardcoded kHexX/kHexY polygon cut was removed (redundant, caused off-center/black-ring artifacts when the shapes disagreed).
 extern "C" int UE1FMVGetFrameBGRA( const unsigned char** outData, int* outW, int* outH )
 {
 	if( !G.active || !G.rgba || G.vidW <= 0 || G.vidH <= 0 )
@@ -308,7 +293,6 @@ extern "C" int UE1FMVOpen( const char* FullPath, SDL_Window* Window )
 {
 	if( G.active ) UE1FMVClose();
 	if( !FullPath || !Window ) return 0;
-	FMV_LOG( "open '%s'", FullPath );
 	G = FMVState();
 	G.window = Window;
 
@@ -377,7 +361,6 @@ extern "C" int UE1FMVOpen( const char* FullPath, SDL_Window* Window )
 
 	// Presentation is Vulkan-only: each decoded frame is presented via RenDev->DrawTile (UnGame.cpp).
 	// The GL blit path was removed with the OpenGL teardown.
-	FMV_LOG("presenting FMV via RenDev->DrawTile (Vulkan)");
 
 	G.pkt = av_packet_alloc();
 	G.frm = av_frame_alloc();
@@ -387,7 +370,6 @@ extern "C" int UE1FMVOpen( const char* FullPath, SDL_Window* Window )
 	SDL_FlushEvents( SDL_FIRSTEVENT, SDL_LASTEVENT );
 	G.startTicks = SDL_GetTicks();
 	G.active = true;
-	FMV_LOG( "ready: %dx%d  audio=%s %dHz", G.vidW, G.vidH, G.adev?"on":"off", G.outRate );
 	return 1;
 }
 
@@ -398,13 +380,13 @@ extern "C" int UE1FMVAdvance( void )
 	// Static splash: re-present the same frame until the timer expires or the user skips. No decode.
 	if( gStill )
 	{
-		if( PollSkip() ) { FMV_LOG("splash skipped"); return 0; }
+		if( PollSkip() ) { return 0; }
 		double wall = ( SDL_GetTicks() - G.startTicks ) / 1000.0;
-		if( wall >= gStillSeconds ) { FMV_LOG("splash ended (%.1fs)", wall); return 0; }
+		if( wall >= gStillSeconds ) { return 0; }
 		return 1;
 	}
 
-	if( PollSkip() ) { FMV_LOG("skipped"); return 0; }
+	if( PollSkip() ) { return 0; }
 
 	double clk = NowClock();
 
@@ -415,17 +397,8 @@ extern "C" int UE1FMVAdvance( void )
 		double durSec = ( G.fmt && G.fmt->duration > 0 ) ? (double)G.fmt->duration / (double)AV_TIME_BASE : 0.0;
 		if( durSec > 0.0 && wall > durSec + 1.5 )
 		{
-			FMV_LOG( "ended (wall cap %.1f > dur %.1f)", wall, durSec );
 			return 0;
 		}
-	}
-
-	{
-		static int dbg = 0;
-		if( ( dbg++ % 15 ) == 0 )
-			FMV_LOG( "adv clk=%.2f audclk=%.2f queued=%u total=%lld eof=%d vq=%d ppts=%.2f stuck=%d",
-				clk, AudioClock(), (unsigned)( G.adev ? SDL_GetQueuedAudioSize(G.adev) : 0 ), G.totalAudioBytes,
-				(int)G.demuxEof, G.vqCount, G.pendingPts, (int)G.audioStuck );
 	}
 
 	// Present the queued frame whose PTS is due against the audio clock (keeps video in sync).
@@ -478,7 +451,6 @@ extern "C" int UE1FMVAdvance( void )
 	bool audioDrained = ( G.adev==0 ) || ( SDL_GetQueuedAudioSize( G.adev )==0 ) || G.audioStuck;
 	if( G.demuxEof && G.vqCount==0 && audioDrained )
 	{
-		FMV_LOG("ended (audioStuck=%d)", (int)G.audioStuck );
 		return 0;
 	}
 	return 1;
@@ -513,7 +485,6 @@ extern "C" void UE1FMVClose( void )
 	bool was = G.active;
 	gStill = false; gStillSeconds = 0.0;
 	G = FMVState();
-	if( was ) FMV_LOG("closed");
 }
 
 // Mark the console frame's cut window in the overlay's alpha (0 = window, 255 = border) by
@@ -577,7 +548,6 @@ static void BakeWindowAlpha( uint8_t* ov, int w, int h )
 	}
 	#undef FMV_LUMI
 	free( vis ); free( stack );
-	FMV_LOG( "overlay window mask baked (%d px cut of %d)", count, N );
 }
 
 // Persistent CPU copy of the retained console-frame overlay (BGRA, border alpha=255, window alpha=0),
@@ -612,7 +582,6 @@ extern "C" void UE1FMVRetainAsOverlay( void )
 	gOverlayRGBA = (uint8_t*)malloc( (size_t)w*h*4 );
 	if( gOverlayRGBA ) { memcpy( gOverlayRGBA, ov, (size_t)w*h*4 ); gOverlayCpuW=w; gOverlayCpuH=h; }
 	free( ov );
-	FMV_LOG( "overlay (console frame) retained %dx%d", gOverlayCpuW, gOverlayCpuH );
 }
 
 extern "C" void UE1FMVSetComposite( int On ) { gComposite = ( On != 0 ); }

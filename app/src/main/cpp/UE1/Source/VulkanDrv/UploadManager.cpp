@@ -30,17 +30,11 @@ void UploadManager::UploadTexture(CachedTexture* tex, const FTextureInfo& Info, 
 
 	TextureUploader* uploader = TextureUploader::GetUploader(Info.Format);
 
-	// [KHG] FMV frames (UnGame.cpp UE1FMVPresentFrame) wrap 8-bit full-range BGRA video as TEXF_RGB32,
-	// which routes to TextureUploader_BGRA8_LM — the 7-bit->8-bit lightmap path that does `<<1` on every
-	// channel. Correct for KHG's 7-bit lightmaps, but it corrupts the 8-bit video (bright pixels wrap to
-	// dark) => the FMV showed black. Route the two fixed FMV cache slots through the direct, non-doubling
-	// BGRA uploader instead (matches the lean device's old direct DrawTile upload). Lightmaps/other RGB32
-	// keep the <<1. Slots: "KHGFMV\0\1" content, "KHGFMV\0\2" overlay (see UnGame.cpp).
+	// [KHG] FMV frames wrap 8-bit BGRA video as TEXF_RGB32, which the lightmap <<1 uploader corrupts (bright pixels wrap dark => black FMV). Route the two fixed FMV cache slots through a direct non-doubling BGRA uploader; lightmaps/other RGB32 keep the <<1.
 	if (Info.Format == TEXF_RGB32 &&
 		(Info.CacheID == (QWORD)0x4B4847464D560001ULL || Info.CacheID == (QWORD)0x4B4847464D560002ULL))
 	{
-		// 219 has no TEXF_BGRA8 enum (extended formats are OLDUNREAL469-only), so hold a direct
-		// VK_FORMAT_B8G8R8A8_UNORM uploader here: plain memcpy of the BGRA bytes, no channel swap, no <<1.
+		// [KHG] 219 has no TEXF_BGRA8 enum, so hold a direct VK_FORMAT_B8G8R8A8_UNORM uploader: plain memcpy of the BGRA bytes, no swap, no <<1.
 		static TextureUploader_Simple FMVDirectUploader(VK_FORMAT_B8G8R8A8_UNORM, 4);
 		uploader = &FMVDirectUploader;
 	}
@@ -57,12 +51,7 @@ void UploadManager::UploadTexture(CachedTexture* tex, const FTextureInfo& Info, 
 
 	VkFormat format = uploader ? uploader->GetVkFormat() : VK_FORMAT_R8G8B8A8_UNORM;
 
-	// [KHG] Realtime slots (FMV content/overlay 0x..0001/0002, ScriptedTextures) reuse ONE CacheID across
-	// clips of DIFFERENT sizes (intro 480x360 -> splash 512x372 -> comm briefings 640x480). The image was
-	// created once at the first size (`if (!tex->image)`) and never recreated, so a later, larger frame got
-	// copied into the smaller image -> the diagonal-sheared "garbled comm FMV". Recreate when the size or
-	// format changes: defer-delete the old image/view (it may still be referenced by an in-flight frame) and
-	// invalidate the bindless slots so the new view is re-registered next GetTextureArrayIndex.
+	// [KHG] Realtime slots (FMV, ScriptedTextures) reuse one CacheID across clips of different sizes, but the image was created once at the first size -> larger frames copied into a too-small image (garbled FMV). Recreate on size/format change: defer-delete the old image/view (may be in-flight) and invalidate the bindless slots.
 	if (tex->image && (tex->image->width != width || tex->image->height != height || tex->imageFormat != format))
 	{
 		renderer->Commands->GetCurrentDeleteList()->imageViews.push_back(std::move(tex->imageView));

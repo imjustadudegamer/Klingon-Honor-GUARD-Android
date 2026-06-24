@@ -3960,14 +3960,7 @@ UEngine* InitEngine()
 }
 
 #if defined(PLATFORM_ANDROID)
-// [KHG] UNREAL_ANDROID_INTRO_FMV_V1: play the long intro FMV (the USER'S OWN INTRO.AVI from the
-// System dir -- we ship no game assets) ONCE before the main menu. The original triggered intro.avi
-// through Windows VFW, which is broken on modern Windows; here we reuse the native playavi handler in
-// UNSDLViewport::Exec (flag "N" = plain full-screen, no console frame). The viewport + GL context
-// already exist (opened in UGameEngine::Init) and the menu level is loaded but not yet drawn when
-// MainLoop starts, so the intro plays first with no menu flash. Skippable (any key/button/touch).
-// No-op if the user has no intro.avi (case-insensitive sdcard resolves intro.avi -> INTRO.AVI, the
-// same way briefings already resolve brief0102.avi -> Brief0102.avi).
+// [KHG] UNREAL_ANDROID_INTRO_FMV_V1: play the user's own INTRO.AVI once before the main menu via the native playavi handler (the original used Windows VFW, broken on modern Windows); skippable, no-op if absent.
 extern "C" void UE1FMVBlackout( void );   // defined in NSDLDrv/Src/FMVPlayer.cpp
 static void UE1AndroidPlayIntroFMVOnce( UEngine* Engine )
 {
@@ -3980,12 +3973,7 @@ static void UE1AndroidPlayIntroFMVOnce( UEngine* Engine )
 	UViewport* Viewport = Engine->Client->Viewports(0);
 	if( !Viewport )
 		return;
-	// playavi resolves intro.avi from the System dir (the user's own file -- we ship none) and
-	// no-ops gracefully via UE1FMVOpen if it's absent, so no existence check is needed here.
-	// Black out first: the menu/loading frame rendered during Init would otherwise sit on screen for
-	// ~1s while avformat opens the large intro file, before playback blackens the screen.
-	// UE1FMVBlackout() uses SDL_GL swaps — a no-op under Vulkan — so also present black frames THROUGH
-	// the render device (clear to black via the viewport) so the lingering 3D frame is actually gone.
+	// Black out first (via both UE1FMVBlackout and the render device, since the former's SDL_GL swap is a no-op under Vulkan) so the lingering 3D frame isn't shown while avformat opens the large intro file; playavi no-ops if the file is absent, so no existence check is needed.
 	UE1FMVBlackout();
 	if( Viewport->RenDev )
 	{
@@ -3997,12 +3985,7 @@ static void UE1AndroidPlayIntroFMVOnce( UEngine* Engine )
 	Viewport->Exec( "playavi intro.avi N None N None N None N None N" );
 }
 
-// [KHG] UNREAL_ANDROID_MICROPROSE_SPLASH_V1: after the intro movie, show the retail MicroProse /
-// Klingon Honor Guard launcher splash (extracted from Khg.exe RT_BITMAP id=102, embedded in
-// KHGSplashData.h) for ~2.5s, skippable, BEFORE the menu. The Windows launcher showed this via
-// hWndSplash; the Android SDL launcher has no splash window, so we re-create it here. Presented
-// through the FMV still path (UE1FMVShowStill -> UGameEngine::Draw -> DrawTile), so it needs no GL.
-// Order is intentional: intro movie first, THEN this splash, THEN the menu.
+// [KHG] UNREAL_ANDROID_MICROPROSE_SPLASH_V1: after the intro movie and before the menu, show the retail MicroProse launcher splash (from Khg.exe RT_BITMAP id=102 in KHGSplashData.h) for ~2.5s via the FMV still path, recreating the Windows hWndSplash the SDL launcher lacks.
 #include "KHGSplashData.h"
 extern "C" int  UE1FMVShowStill( const unsigned char* Bgra, int W, int H, double Seconds );
 extern "C" int  UE1FMVAdvance( void );

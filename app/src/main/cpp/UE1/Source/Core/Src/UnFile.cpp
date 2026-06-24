@@ -111,13 +111,9 @@ static UBOOL AndroidLooksLikeUnrealRoot( const char* Root )
 	if( !AndroidFileExistsReadable( Path ) )
 		return false;
 
-	snprintf( Path, sizeof(Path), "%s/System/UnrealI.u", Root );
+	snprintf( Path, sizeof(Path), "%s/System/Klingons.u", Root );
 	if( !AndroidFileExistsReadable( Path ) )
-	{
-		snprintf( Path, sizeof(Path), "%s/System/UnrealShare.u", Root );
-		if( !AndroidFileExistsReadable( Path ) )
-			return false;
-	}
+		return false;
 
 	snprintf( Path, sizeof(Path), "%s/Maps", Root );
 	if( !AndroidDirExists( Path ) )
@@ -375,7 +371,7 @@ CORE_API void appAndroidInitFileSystem()
 	AndroidEnsureIniFile( "Unreal.ini", "Default.ini", NULL,
 		"; Created by UE1 Android port\r\n\r\n" );
 	AndroidEnsureIniFile( "User.ini", "DefUser.ini", "DefaultUser.ini",
-		"[DefaultPlayer]\r\nName=Player\r\nClass=UnrealShare.MaleOne\r\n\r\n[Engine.Input]\r\n\r\n" );
+		"[DefaultPlayer]\r\nName=Player\r\nClass=Klingons.DMMale\r\n\r\n[Engine.Input]\r\n\r\n" );
 
 	setenv( "UE1_ANDROID_ROOT", GAndroidUnrealRootDir, 1 );
 	setenv( "HOME", GAndroidUnrealRootDir, 1 );

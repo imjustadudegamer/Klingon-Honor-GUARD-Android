@@ -762,10 +762,7 @@ static UBOOL SetupRaster( FTransform** Pts, INT NumPts, FSpanBuffer* Span, INT E
 {
 	guard(SetupRaster);
 
-	// [KHG] HackRaster is a fixed global FRasterSpan[1200] indexed by Top->IntY*2. If the render
-	// target is taller than 1200px (portrait / supersampled FBO), Top->IntY would index past it and
-	// stomp adjacent globals -> geometry corruption / crash. Cap EndY to the array capacity so the
-	// IntY clamp below keeps every index in bounds. (No effect at <=1200px, e.g. the Thor's 1080.)
+	// [KHG] Cap EndY to ARRAY_COUNT(HackRaster): HackRaster is a fixed FRasterSpan[1200] indexed by IntY, so a render target taller than 1200px would index past it and stomp adjacent globals.
 	EndY = Min( EndY, (INT)ARRAY_COUNT(HackRaster) - 1 );
 
 	// Compute integer coords.
@@ -792,11 +789,7 @@ static UBOOL SetupRaster( FTransform** Pts, INT NumPts, FSpanBuffer* Span, INT E
 		for( INT i=0; i<NumPts; i++ )
 		{
 			Pts[i]->IntY    = Clamp( Pts[i]->IntY, 0, EndY );
-			// [KHG] was Clamp( Pts[i]->IntY, ... ): it overwrote the FLOAT sub-pixel ScreenY with the
-			// INTEGER IntY for EVERY vertex whenever the surface crossed off-screen (most large
-			// walls/floors), zeroing the raster edge slope (YAdj = IntY-ScreenY at ~:811) -> wrong
-			// occlusion spans -> surfaces wrongly culled -> "see through into other rooms". Clamp
-			// ScreenY to its own value so in-range verts keep sub-pixel precision.
+			// [KHG] Clamp ScreenY to its own value (was Clamp(IntY,...)): overwriting FLOAT ScreenY with INTEGER IntY zeroed the raster edge slope when a surface crossed off-screen, wrongly culling surfaces ("see through into other rooms").
 			Pts[i]->ScreenY = Clamp( Pts[i]->ScreenY, 0.f, (FLOAT)EndY );
 		}
 	}
@@ -1557,12 +1550,6 @@ void URender::OccludeBsp( FSceneNode* Frame )
 
 				// Perform the span buffer clipping and updating.
 				uclock(GStat.SpanTime);
-#if 0 // [KHG-OCCLTEST] de-risk: never consume the zone Screen span buffer -> software occlusion
-				// disabled, every surface submitted at full coverage, z-buffer does occlusion. If the
-				// "see-through" vanishes => bug is engine span occlusion (fix here). If it persists =>
-				// device/projection (Vulkan justified). REVERT after the test.
-				Visible = TempDrawList->Span.CopyFromRaster( *SpanBuffer, RasterStartY, RasterEndY, HackRaster+RasterStartY );
-#else
 				if
 				(	!(PolyFlags & PF_NoOcclude)
 				||	(PolyFlags&(PF_Portal|PF_Invisible))==(PF_Portal|PF_Invisible)
@@ -1570,7 +1557,6 @@ void URender::OccludeBsp( FSceneNode* Frame )
 					Visible = TempDrawList->Span.CopyFromRasterUpdate( *SpanBuffer, RasterStartY, RasterEndY, HackRaster+RasterStartY );
 				else
 					Visible = TempDrawList->Span.CopyFromRaster( *SpanBuffer, RasterStartY, RasterEndY, HackRaster+RasterStartY );
-#endif
 				uunclock(GStat.SpanTime);
 
 				// Process the spans.

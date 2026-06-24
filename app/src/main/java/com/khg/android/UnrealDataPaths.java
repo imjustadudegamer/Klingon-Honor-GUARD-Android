@@ -83,20 +83,18 @@ final class UnrealDataPaths {
     private static final class ZipRootFlags {
         boolean core;
         boolean engine;
-        boolean unrealI;
-        boolean unrealShare;
+        boolean klingons;
         boolean map;
 
         boolean valid() {
-            return core && engine && (unrealI || unrealShare) && map;
+            return core && engine && klingons && map;
         }
 
         int score() {
             int s = 0;
             if (core) s++;
             if (engine) s++;
-            if (unrealI) s += 2;
-            if (unrealShare) s++;
+            if (klingons) s += 2;
             if (map) s += 2;
             return s;
         }
@@ -199,9 +197,7 @@ final class UnrealDataPaths {
         boolean maps = mapsDir.isDirectory();
         boolean hasCore = findCaseInsensitive(systemDir, "Core.u") != null;
         boolean hasEngine = findCaseInsensitive(systemDir, "Engine.u") != null;
-        boolean hasUnrealI = findCaseInsensitive(systemDir, "UnrealI.u") != null;
-        boolean hasUnrealShare = findCaseInsensitive(systemDir, "UnrealShare.u") != null;
-        boolean hasGamePackage = hasUnrealI || hasUnrealShare;
+        boolean hasGamePackage = findCaseInsensitive(systemDir, "Klingons.u") != null;
         boolean hasMap = findCaseInsensitive(mapsDir, "Entry.unr") != null || hasAnyMap(mapsDir);
         boolean ok = rootDir && system && maps && hasCore && hasEngine && hasGamePackage && hasMap;
         if (verbose || root.exists()) {
@@ -270,9 +266,7 @@ final class UnrealDataPaths {
     static void normalizeConfigForDetectedData(File root) {
         if (root == null) return;
         File systemDir = new File(root, "System");
-        boolean hasUnrealI = findCaseInsensitive(systemDir, "UnrealI.u") != null;
-        boolean hasUnrealShare = findCaseInsensitive(systemDir, "UnrealShare.u") != null;
-        if (!hasUnrealI || hasUnrealShare) return;
+        if (findCaseInsensitive(systemDir, "Klingons.u") == null) return;
         patchPackageName(new File(root, "System/Unreal.ini"));
         patchPackageName(new File(root, "System/Default.ini"));
     }
@@ -282,10 +276,14 @@ final class UnrealDataPaths {
         try {
             String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
             String patched = text
-                    .replace("UnrealShare.SinglePlayer", "UnrealI.SinglePlayer")
-                    .replace("UnrealShare.DeathMatchGame", "UnrealI.DeathMatchGame")
-                    .replace("DefaultGame=UnrealShare.", "DefaultGame=UnrealI.")
-                    .replace("DefaultServerGame=UnrealShare.", "DefaultServerGame=UnrealI.");
+                    .replace("DefaultGame=UnrealI.SinglePlayer", "DefaultGame=Klingons.SinglePlayer")
+                    .replace("DefaultGame=UnrealShare.SinglePlayer", "DefaultGame=Klingons.SinglePlayer")
+                    .replace("DefaultServerGame=UnrealI.DeathMatchGame", "DefaultServerGame=Klingons.DeathMatchGame")
+                    .replace("DefaultServerGame=UnrealShare.DeathMatchGame", "DefaultServerGame=Klingons.DeathMatchGame")
+                    .replace("DefaultGame=UnrealI.", "DefaultGame=Klingons.")
+                    .replace("DefaultGame=UnrealShare.", "DefaultGame=Klingons.")
+                    .replace("DefaultServerGame=UnrealI.", "DefaultServerGame=Klingons.")
+                    .replace("DefaultServerGame=UnrealShare.", "DefaultServerGame=Klingons.");
             if (!patched.equals(text)) {
                 Files.write(file.toPath(), patched.getBytes(StandardCharsets.UTF_8));
                 Log.i(TAG_CONFIG, "Patched retail v200 config package names: " + file.getAbsolutePath());
@@ -546,7 +544,7 @@ final class UnrealDataPaths {
 
             String unrealDocId = findSafUnrealRootDocId(context, treeUri, selectedDocId);
             if (unrealDocId == null) {
-                return ImportResult.fail("The selected folder does not contain valid Unreal data. Please select the 'Unreal' folder. Expected at least: System/Core.u, System/Engine.u, UnrealI.u or UnrealShare.u, and Maps/*.unr.");
+                return ImportResult.fail("The selected folder does not contain valid Klingon Honor Guard data. Please select the 'Unreal' folder. Expected at least: System/Core.u, System/Engine.u, System/Klingons.u, and Maps/*.unr.");
             }
 
             File target = primaryAppRoot(context);
@@ -571,7 +569,7 @@ final class UnrealDataPaths {
         try {
             String rootPrefix = detectUnrealZipRootPrefix(context, zipUri);
             if (rootPrefix == null) {
-                return ImportResult.fail("The ZIP file does not contain a valid Unreal data structure. Expected at least: System/Core.u, System/Engine.u, UnrealI.u or UnrealShare.u, and Maps/*.unr.");
+                return ImportResult.fail("The ZIP file does not contain a valid Klingon Honor Guard data structure. Expected at least: System/Core.u, System/Engine.u, System/Klingons.u, and Maps/*.unr.");
             }
 
             File target = primaryAppRoot(context);
@@ -604,11 +602,10 @@ final class UnrealDataPaths {
         if (system == null || maps == null) return false;
         boolean core = findSafChild(context, treeUri, system.docId, "Core.u", false) != null;
         boolean engine = findSafChild(context, treeUri, system.docId, "Engine.u", false) != null;
-        boolean unrealI = findSafChild(context, treeUri, system.docId, "UnrealI.u", false) != null;
-        boolean unrealShare = findSafChild(context, treeUri, system.docId, "UnrealShare.u", false) != null;
+        boolean game = findSafChild(context, treeUri, system.docId, "Klingons.u", false) != null;
         boolean map = hasAnySafMap(context, treeUri, maps.docId);
-        Log.i(TAG_IMPORT, "SAF data check: core=" + core + " engine=" + engine + " game=" + (unrealI || unrealShare) + " map=" + map + " doc=" + rootDocId);
-        return core && engine && (unrealI || unrealShare) && map;
+        Log.i(TAG_IMPORT, "SAF data check: core=" + core + " engine=" + engine + " game=" + game + " map=" + map + " doc=" + rootDocId);
+        return core && engine && game && map;
     }
 
     private static SafNode findSafChild(Context context, Uri treeUri, String parentDocId, String expectedName, boolean expectedDir) {
@@ -720,8 +717,7 @@ final class UnrealDataPaths {
             if ("System".equalsIgnoreCase(dir)) {
                 if ("Core.u".equalsIgnoreCase(file)) flags.core = true;
                 else if ("Engine.u".equalsIgnoreCase(file)) flags.engine = true;
-                else if ("UnrealI.u".equalsIgnoreCase(file)) flags.unrealI = true;
-                else if ("UnrealShare.u".equalsIgnoreCase(file)) flags.unrealShare = true;
+                else if ("Klingons.u".equalsIgnoreCase(file)) flags.klingons = true;
             } else if ("Maps".equalsIgnoreCase(dir) && file.toLowerCase(Locale.ROOT).endsWith(".unr")) {
                 flags.map = true;
             }

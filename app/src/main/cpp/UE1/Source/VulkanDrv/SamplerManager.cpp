@@ -49,9 +49,7 @@ void SamplerManager::CreateSceneSamplers()
 
 		if (i & 2)
 		{
-			// [KHG] GL 1:1: clamped textures use GL_CLAMP_TO_EDGE. UT99 used MIRROR_CLAMP_TO_EDGE which
-			// needs VK_KHR_sampler_mirror_clamp_to_edge (promoted to 1.2 core — fragile to require on a
-			// 1.3 Adreno that exposes it core-only). CLAMP_TO_EDGE is core everywhere and matches OpenGL.
+			// [KHG] Use CLAMP_TO_EDGE (GL 1:1, core everywhere) instead of UT99's MIRROR_CLAMP_TO_EDGE, which needs an extension fragile to require on Adreno.
 			builder.AddressMode(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
 		}
 		else

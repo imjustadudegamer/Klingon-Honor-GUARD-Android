@@ -1064,8 +1064,6 @@ JNIEXPORT void JNICALL SDL_JAVA_INTERFACE(onNativeSurfaceChanged)(JNIEnv *env, j
         /* If the surface has been previously destroyed by onNativeSurfaceDestroyed, recreate it here */
         /* [KHG] Only GL windows get an EGL surface. A Vulkan window must leave the ANativeWindow free,
            else vkCreateAndroidSurfaceKHR fails with VK_ERROR_NATIVE_WINDOW_IN_USE_KHR. */
-        SDL_Log("KHG_VK onNativeSurfaceChanged flags=0x%08x OPENGL=%d VULKAN=%d", (unsigned)Android_Window->flags,
-            !!(Android_Window->flags & SDL_WINDOW_OPENGL), !!(Android_Window->flags & SDL_WINDOW_VULKAN));
         /* [KHG] Vulkan-only: never (re)create an EGL surface (would lock the shared ANativeWindow). */
         if (0 && (Android_Window->flags & SDL_WINDOW_OPENGL) && data->egl_surface == EGL_NO_SURFACE) {
             data->egl_surface = SDL_EGL_CreateSurface(_this, (NativeWindowType)data->native_window);

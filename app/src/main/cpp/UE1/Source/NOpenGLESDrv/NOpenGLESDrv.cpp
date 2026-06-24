@@ -353,16 +353,7 @@ UBOOL UNOpenGLESRenderDevice::Init( UViewport* InViewport )
 	SupportsFogMaps = true;
 	SupportsDistanceFog = true;
 
-	// [KHG] This is a HARDWARE (z-buffer) renderer: it must NOT be span-based. Every reference UE1
-	// hardware driver (OpenGLDrv/XOpenGLDrv/D3D8/D3D9) sets SpanBased=0; the base port omitted it.
-	// If left non-zero, URender::OccludeBsp drives surface visibility through the SOFTWARE span
-	// rasterizer (SetupRaster/HackRaster), which wrongly culls BSP surfaces -> faces missing/flicker.
-	// [KHG-GFXDIAG] also log the actually-granted depth size + the prior SpanBased value.
-	{
-		int GrantedDepth = -1;
-		SDL_GL_GetAttribute( SDL_GL_DEPTH_SIZE, &GrantedDepth );
-		debugf( NAME_Log, "[KHG-GFXDIAG] depthBits=%d  SpanBased(before)=%d  FrameBuffered=%d", GrantedDepth, (INT)SpanBased, (INT)FrameBuffered );
-	}
+	// [KHG] SpanBased=0: this is a hardware (z-buffer) renderer, so it must not drive visibility through the software span rasterizer (which wrongly culls BSP surfaces); the base port omitted this like all reference UE1 HW drivers set.
 	SpanBased = 0;
 
 	if( BrightnessScale < 0.25f )
@@ -735,9 +726,7 @@ UBOOL UNOpenGLESRenderDevice::EnsureAndroidSceneFBO()
 
 	glGenRenderbuffers( 1, &AndroidSceneDepthRB );
 	glBindRenderbuffer( GL_RENDERBUFFER, AndroidSceneDepthRB );
-	// [KHG] Prefer a 24-bit depth renderbuffer (anti z-fighting / vanishing faces) when
-	// GL_OES_depth24 is present, else fall back to 16-bit. (Native mode renders to the window's
-	// own 24-bit depth buffer, not this FBO; this covers the fixed-resolution modes 1/2.)
+	// [KHG] Prefer a 24-bit depth renderbuffer (anti z-fighting / vanishing faces) when GL_OES_depth24 is present, else fall back to 16-bit.
 	GLenum SceneDepthFmt = GL_DEPTH_COMPONENT16;
 	const char* GlExt = (const char*)glGetString( GL_EXTENSIONS );
 	if( GlExt && strstr( GlExt, "GL_OES_depth24" ) )
@@ -971,23 +960,6 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
 
 	check(Surface.Texture);
 
-	// [KHG-GFXDIAG3] once: which framebuffer is the world drawn into + its depth bits + GL depth
-	// state. Determines engine-vs-device for the "see-through" bug (FB 0 + 24-bit depth working =>
-	// engine occlusion; FBO w/o depth => device).
-	{
-		static UBOOL GfxDiag3 = 0;
-		if( !GfxDiag3 )
-		{
-			GfxDiag3 = 1;
-			GLint fb = -1, dbits = -1, dtype = -1;
-			glGetIntegerv( GL_FRAMEBUFFER_BINDING, &fb );
-			glGetIntegerv( GL_DEPTH_BITS, &dbits );
-			GLboolean dw = 0; glGetBooleanv( GL_DEPTH_WRITEMASK, &dw );
-			debugf( NAME_Log, "[KHG-GFXDIAG3] FB=%d FBOActive=%d depthBits=%d depthTest=%d depthWrite=%d cull=%d",
-				(INT)fb, (INT)AndroidSceneFBOActive, (INT)dbits, (INT)glIsEnabled(GL_DEPTH_TEST), (INT)dw, (INT)glIsEnabled(GL_CULL_FACE) );
-		}
-	}
-
 	DWORD RenderPolyFlags = Surface.PolyFlags;
 	const UBOOL bHubWaterRings2 = UE1GLESIsHubWaterRings2Texture( *Surface.Texture );
 	if( UE1GLESNeedsHubSplashMask( *Surface.Texture ) )
@@ -1209,9 +1181,7 @@ void UNOpenGLESRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Texture,
 void UNOpenGLESRenderDevice::Draw2DLine( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2 )
 {
 	guard(UNOpenGLESRenderDevice::Draw2DLine);
-	// [KHG] Was an empty stub. Render as a thin (~1px) screen-space quad through the existing
-	// triangle batcher (no separate GL_LINES path needed). Screen coords project exactly like
-	// DrawTile: clip = RFX2/RFY2 * Z * (coord - Frame->FX2/FY2).
+	// [KHG] Was an empty stub: render as a thin (~1px) screen-space quad through the existing triangle batcher (no separate GL_LINES path needed), projecting screen coords like DrawTile.
 	SetSceneNode( Frame );
 	CurrentShaderFlags = SF_VtxColor;
 	ResetTexture( 0 ); ResetTexture( 1 ); ResetTexture( 2 ); ResetTexture( 3 );
@@ -1785,11 +1755,7 @@ void UNOpenGLESRenderDevice::UpdateTextureFilter( const FTextureInfo& Info, DWOR
 	}
 	else
 	{
-		// [KHG] Palettized world/HUD/sprite textures previously got NO wrap mode set, so they
-		// defaulted to GL_REPEAT. Textures with a clamped sub-region (UClamp/VClamp < size: fonts,
-		// many HUD/menu tiles, sky, decals) then wrapped to the opposite edge -> halos/seams. Honor
-		// the engine's clamp request; full (UClamp==0 or ==size) textures stay REPEAT so tiling
-		// world surfaces are unaffected.
+		// [KHG] Honor the engine's clamp request on palettized textures: previously they got no wrap mode (defaulting to GL_REPEAT), so clamped sub-regions (UClamp/VClamp < size: fonts, HUD, sky, decals) wrapped to the opposite edge -> halos/seams.
 		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
 			( Info.UClamp > 0 && Info.UClamp < Info.USize ) ? GL_CLAMP_TO_EDGE : GL_REPEAT );
 		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
@@ -1993,11 +1959,7 @@ void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD Poly
 		UploadTexture( Info, ( PolyFlags & PF_Masked ), !OldBind, BaseMip );
 	}
 
-	// [KHG] Filtering (PF_NoSmooth) and wrap (Info.UClamp/VClamp) depend on the per-poly draw, not
-	// just on the cached texture object, so re-apply on EVERY bind rather than only on upload.
-	// Otherwise a texture shared across smooth/nosmooth polys keeps whichever filter it was first
-	// uploaded with -> shimmer/aliasing flips. FlushTriangles() above already flushed the prior
-	// batch, so changing texture state here only affects subsequent draws.
+	// [KHG] Re-apply filter (PF_NoSmooth) and wrap (UClamp/VClamp) on EVERY bind, not just on upload: they depend on the per-poly draw, so a texture shared across smooth/nosmooth polys would otherwise keep whichever filter it was first uploaded with -> shimmer.
 	UpdateTextureFilter( Info, PolyFlags, Bind->BaseMip );
 
 	unguard;

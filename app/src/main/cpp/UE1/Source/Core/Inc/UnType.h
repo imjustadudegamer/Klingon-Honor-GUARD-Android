@@ -440,18 +440,7 @@ class CORE_API UStringProperty : public UProperty
 	UStrProperty.
 -----------------------------------------------------------------------------*/
 
-//
-// Describes a dynamic string variable (FString-backed).
-//
-// Present in the build-219 Core used by Star Trek: Klingon Honor Guard, but
-// absent from this stock pkg-61 engine (which only has the fixed-size
-// UStringProperty). KHG's Core.u registers a native 'StrProperty' class, so the
-// linker requires a matching C++ class to bind on load; without it the engine
-// fatals with "Can't find Class Core.StrProperty in file Core.u" during
-// InitEngine. KHG itself declares no dynamic strings (all 179 string vars are
-// fixed string[N] -> UStringProperty), so this property's value path is not
-// exercised by KHG data, but it is implemented fully for correctness.
-//
+// Dynamic FString-backed string property: present in KHG's build-219 Core but absent from this stock pkg-61 engine; needed so the native 'StrProperty' class in KHG's Core.u can bind on load (else InitEngine fatals), though KHG itself uses no dynamic strings.
 class CORE_API UStrProperty : public UProperty
 {
 	DECLARE_CLASS_WITHOUT_CONSTRUCT(UStrProperty,UProperty,0)

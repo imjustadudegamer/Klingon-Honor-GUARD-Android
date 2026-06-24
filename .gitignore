@@ -3,6 +3,7 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+khg-release-credentials.txt
 
 # --- Gradle / Android build outputs ---
 .gradle/

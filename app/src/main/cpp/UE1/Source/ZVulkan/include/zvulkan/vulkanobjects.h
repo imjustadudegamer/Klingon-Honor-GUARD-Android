@@ -532,10 +532,7 @@ inline VulkanCommandPool::VulkanCommandPool(VulkanDevice *device, int queueFamil
 	VkCommandPoolCreateInfo poolInfo = {};
 	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	poolInfo.queueFamilyIndex = queueFamilyIndex;
-	// [KHG] Per-frame command buffers are re-recorded each frame via vkBeginCommandBuffer (implicit
-	// reset). That is only legal if the pool was created with RESET_COMMAND_BUFFER_BIT — without it,
-	// re-beginning a submitted command buffer is undefined behaviour and GPU-faults after a few frames.
-	// Matches the Elite Force Vulkan port (TRANSIENT | RESET_COMMAND_BUFFER_BIT).
+	// [KHG] Per-frame buffers are re-recorded via vkBeginCommandBuffer (implicit reset), legal only with RESET_COMMAND_BUFFER_BIT; without it re-beginning a submitted buffer is UB and GPU-faults after a few frames.
 	poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
 	VkResult result = vkCreateCommandPool(device->device, &poolInfo, nullptr, &pool);

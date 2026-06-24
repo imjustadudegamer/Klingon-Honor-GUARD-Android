@@ -80,8 +80,6 @@ int Android_CreateWindow(_THIS, SDL_Window *window)
 
     /* Do not create EGLSurface for Vulkan window since it will then make the window
        incompatible with vkCreateAndroidSurfaceKHR */
-    SDL_Log("KHG_VK Android_CreateWindow flags=0x%08x OPENGL=%d VULKAN=%d", (unsigned)window->flags,
-        !!(window->flags & SDL_WINDOW_OPENGL), !!(window->flags & SDL_WINDOW_VULKAN));
 #ifdef SDL_VIDEO_OPENGL_EGL
     if (0 /* [KHG] Vulkan-only: never create an EGL surface; it would lock the shared ANativeWindow and
              block vkCreateAndroidSurfaceKHR (VK_ERROR_NATIVE_WINDOW_IN_USE_KHR). */) {

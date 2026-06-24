@@ -303,21 +303,6 @@ void URender::DrawMesh
 	STAT(uclock(GStat.MeshTime));
 	FMemMark Mark(GMem);
 	UMesh*  Mesh = Owner->Mesh;
-	// [KHG-MESHDIAG] one-shot per mesh: log geometry so we can tell a real 3D mesh from a flat 2-tri
-	// effect card (the "2D texture square on kill" investigation). Remove before ship.
-	if( Mesh )
-	{
-		static TArray<UMesh*> SeenMeshes;
-		UBOOL Seen = 0;
-		for( INT si=0; si<SeenMeshes.Num(); ++si ) if( SeenMeshes(si)==Mesh ) { Seen=1; break; }
-		if( !Seen )
-		{
-			SeenMeshes.AddItem( Mesh );
-			debugf( NAME_Log, "[KHG-MESHDIAG] mesh='%s' FrameVerts=%i AnimFrames=%i Verts=%i Tris=%i Style=%i DrawType=%i",
-				Mesh->GetName(), Mesh->FrameVerts, Mesh->AnimFrames, Mesh->Verts.Num(), Mesh->Tris.Num(),
-				(INT)Owner->Style, (INT)Owner->DrawType );
-		}
-	}
 	FVector Hack = FVector(0,-8,0);
 	UBOOL NotWeaponHeuristic=(Owner->Owner!=Frame->Viewport->Actor);
 	if( !Engine->Client->CurvedSurfaces )
@@ -342,49 +327,6 @@ void URender::DrawMesh
 	STAT(uunclock(GStat.MeshGetFrameTime));
 	unguardSlow;
 
-	// [KHG-FLATDIAG] Detect a mesh whose transformed verts are nearly COPLANAR (flat at any orientation)
-	// — the "killed thing shows its 2D mesh" bug. Dedup by actor CLASS so every kind of flat effect logs,
-	// and include the texture/skin so we know what's shown. Coplanarity = max distance of any vert from
-	// the plane of the first non-degenerate triangle, vs the overall extent.
-	{
-		FVector mn( 1e30f,1e30f,1e30f), mx(-1e30f,-1e30f,-1e30f);
-		for( INT i=0; i<Mesh->FrameVerts; i++ )
-		{
-			const FVector& P = Samples[i].Point;
-			mn.X=Min(mn.X,P.X); mn.Y=Min(mn.Y,P.Y); mn.Z=Min(mn.Z,P.Z);
-			mx.X=Max(mx.X,P.X); mx.Y=Max(mx.Y,P.Y); mx.Z=Max(mx.Z,P.Z);
-		}
-		FLOAT ext = Max(mx.X-mn.X, Max(mx.Y-mn.Y, mx.Z-mn.Z));
-		// plane from first triangle with area
-		FVector N(0,0,0); FVector A = Mesh->FrameVerts>0 ? Samples[0].Point : FVector(0,0,0);   // [KHG] guard OOB read on a 0-vert mesh
-		for( INT t=0; t+2<Mesh->FrameVerts && N.SizeSquared()<1e-6f; ++t )
-		{
-			FVector e1=Samples[t+1].Point-Samples[t].Point, e2=Samples[t+2].Point-Samples[t].Point;
-			N = e1 ^ e2; A = Samples[t].Point;
-		}
-		FLOAT maxDist=0.f;
-		if( N.SizeSquared()>1e-6f ) { N=N.SafeNormal(); for( INT i=0;i<Mesh->FrameVerts;i++ ) maxDist=Max(maxDist,(FLOAT)Abs((Samples[i].Point-A)|N)); }
-		// Average view-space Z (distance); angular size ~ ext/Zavg tells us how big it is on screen.
-		FLOAT Zsum=0.f; for( INT i=0;i<Mesh->FrameVerts;i++ ) Zsum+=Samples[i].Point.Z;
-		FLOAT Zavg = Mesh->FrameVerts? Zsum/Mesh->FrameVerts : 1.f;
-		FLOAT angSize = (Zavg>1.f)? ext/Zavg : 0.f;
-		UBOOL bFlat = ( Mesh->FrameVerts>=3 && ext>1.f && maxDist < 0.06f*ext );
-		// Log EVERY mesh actor class once with full info — complete inventory of what renders, so the
-		// "2D-in-3D square" can be identified (look for FLAT=1 or a big angSize on a kill-spawned class).
-		{
-			static TArray<FName> MeshSeen;
-			FName cn = Owner->GetClass()->GetFName();
-			UBOOL s=0; for( INT k=0;k<MeshSeen.Num();++k ) if(MeshSeen(k)==cn){s=1;break;}
-			if( !s )
-			{
-				MeshSeen.AddItem(cn);
-				UTexture* T = Owner->Skin ? Owner->Skin : (Mesh->Textures.Num()? Mesh->Textures(0):NULL);
-				debugf( NAME_Log, "[KHG-MESH2] class='%s' mesh='%s' FLAT=%i anim='%s' frame=%.2f DrawType=%i Style=%i bUnlit=%i skin='%s' ext=%.0f Zavg=%.0f angSize=%.2f planeDist=%.2f",
-					Owner->GetClass()->GetName(), Mesh->GetName(), (INT)bFlat, *Owner->AnimSequence, Owner->AnimFrame,
-					(INT)Owner->DrawType, (INT)Owner->Style, (INT)Owner->bUnlit, T?T->GetName():"none", ext, Zavg, angSize, maxDist );
-			}
-		}
-	}
 
 	// Compute outcodes.
 	BYTE Outcode = FVF_OutReject;

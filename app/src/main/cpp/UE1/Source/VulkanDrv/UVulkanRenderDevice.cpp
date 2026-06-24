@@ -19,17 +19,13 @@
 #include <cstring>    // memcpy
 #include <stdexcept>
 
-// Surface uses vkCreateAndroidSurfaceKHR (not SDL_Vulkan_*): this port's viewport hands back a window
-// SDL doesn't treat as a Vulkan window, so we make the surface straight from the ANativeWindow.
+// [KHG] Surface via vkCreateAndroidSurfaceKHR (not SDL_Vulkan_*): SDL doesn't treat this port's window as a Vulkan window, so build the surface straight from the ANativeWindow.
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_syswm.h"
 #include <android/native_window.h>
-#include <android/log.h>
 
 // IMPLEMENT_CLASS + CurrentFrameIndex live in VulkanDrv.cpp.
 
-// [KHG] diagnostic logging pulled (was KHG_VKT first-frame/per-submit tracing).
-#define VKT(...) ((void)0)
 
 /*-----------------------------------------------------------------------------
 	Construction / config.
@@ -96,8 +92,7 @@ void VulkanError( const char* text )
 	Android surface lifecycle.
 -----------------------------------------------------------------------------*/
 
-// The current ANativeWindow backing the SDL window. NULL while the app is backgrounded (the Android
-// SurfaceView has no surface), which is exactly when we must NOT touch Vulkan presentation.
+// [KHG] The ANativeWindow backing the SDL window; NULL while backgrounded (no SurfaceView surface), exactly when we must not touch Vulkan presentation.
 ANativeWindow* UVulkanRenderDevice::GetCurrentNativeWindow()
 {
 	SDL_Window* win = (SDL_Window*)WindowHandle;
@@ -111,10 +106,7 @@ ANativeWindow* UVulkanRenderDevice::GetCurrentNativeWindow()
 	return wm.info.android.window;
 }
 
-// Sleep/resume: the ANativeWindow is destroyed when the app backgrounds and a NEW one is created on
-// resume, so the old VkSurface becomes invalid. Rebuild the surface from the current window and point
-// the device at it (the swapchain reads Device->Surface at Create time). Returns 0 if there is no
-// window yet (still backgrounded) -> caller skips the frame.
+// [KHG] Sleep/resume: a new ANativeWindow on resume invalidates the old VkSurface; rebuild the surface and point Device->Surface at it (swapchain Create reads it). Returns 0 if still backgrounded so the caller skips the frame.
 UBOOL UVulkanRenderDevice::RecreateAndroidSurface()
 {
 	guard(UVulkanRenderDevice::RecreateAndroidSurface);
@@ -139,9 +131,7 @@ UBOOL UVulkanRenderDevice::RecreateAndroidSurface()
 	}
 
 	auto newSurface = std::make_shared<VulkanSurface>( Instance, surfaceHandle );
-	// [KHG] Keep the OLD surface alive until RecreateSwapChainForResume destroys the old swapchain that was
-	// built on it. Otherwise reassigning both shared_ptrs frees the VkSurface while its VkSwapchainKHR is still
-	// alive (use-after-free; undefined behaviour). Released at the end of RecreateSwapChainForResume.
+	// [KHG] Keep the old surface alive until RecreateSwapChainForResume destroys the swapchain built on it, else freeing the VkSurface while its VkSwapchainKHR lives is a use-after-free.
 	RetiredSurface = Surface;
 	Device->Surface = newSurface;   // swapchain Create() reads device->Surface->Surface
 	Surface = newSurface;
@@ -150,9 +140,7 @@ UBOOL UVulkanRenderDevice::RecreateAndroidSurface()
 	unguard;
 }
 
-// After the surface is swapped on resume, the CommandBufferManager's swapchain still references the old
-// (destroyed) surface and is not flagged Lost, so SubmitCommands wouldn't rebuild it. Force a rebuild
-// against the new surface here (mirrors the present-time recreate in CommandBufferManager::SubmitCommands).
+// [KHG] After a resume surface swap the swapchain still points at the old surface but isn't flagged Lost, so force a rebuild against the new surface here (mirrors SubmitCommands' present-time recreate).
 void UVulkanRenderDevice::RecreateSwapChainForResume()
 {
 	guard(UVulkanRenderDevice::RecreateSwapChainForResume);
@@ -185,8 +173,7 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	}
 	WindowHandle = win;
 
-	// Instance with the fixed Android surface extensions. ZVulkan's VulkanInstance ctor runs
-	// volkInitialize + volkLoadInstance, so vkCreateAndroidSurfaceKHR is live afterwards.
+	// Instance with the Android surface extensions; ZVulkan's VulkanInstance ctor runs volk init so vkCreateAndroidSurfaceKHR is live afterwards.
 	VulkanInstanceBuilder ib;
 	ib.ApiVersionsToTry( { VK_API_VERSION_1_1, VK_API_VERSION_1_0 } );
 	ib.RequireExtension( VK_KHR_SURFACE_EXTENSION_NAME );
@@ -225,9 +212,7 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	Surface = std::make_shared<VulkanSurface>( Instance, surfaceHandle );
 	BoundWindow = awin;
 
-	// Bindless device. RequireExtension(DESCRIPTOR_INDEXING): if absent the device is rejected and we
-	// fall back to GLES gracefully (vs OptionalDescriptorIndexing, which would give a false-positive
-	// bindless check then crash, since ZVulkan only chains the feature struct when the EXT is enabled).
+	// Bindless device: RequireExtension(DESCRIPTOR_INDEXING) so an absent EXT rejects the device (GLES fallback), vs Optional which would false-positive the bindless check then crash.
 	auto deviceBuilder = VulkanDeviceBuilder();
 	deviceBuilder.Surface( Surface );
 	deviceBuilder.RequireExtension( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
@@ -250,8 +235,7 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 		VK_VERSION_MAJOR(props.apiVersion), VK_VERSION_MINOR(props.apiVersion), VK_VERSION_PATCH(props.apiVersion),
 		props.limits.maxImageDimension2D );
 
-	// Construct the managers. RenderPassManager builds postprocess/present/bloom layouts; CommandBuffer
-	// Manager builds the swapchain object (actual swapchain images are created lazily on first present).
+	// Construct the managers; CommandBufferManager builds the swapchain object (its images are created lazily on first present).
 	Buffers.reset( new BufferManager( this ) );
 	Commands.reset( new CommandBufferManager( this ) );
 	Samplers.reset( new SamplerManager( this ) );
@@ -333,13 +317,8 @@ void UVulkanRenderDevice::Exit()
 
 void UVulkanRenderDevice::SubmitAndWait( bool present, int presentWidth, int presentHeight, bool presentFullscreen )
 {
-	static int sawTrace = 80;
-	bool trace = (sawTrace > 0);
-	if( trace ) { sawTrace--; VKT("SubmitAndWait: UpdateBindlessSet begin"); }
 	DescriptorSets->UpdateBindlessSet();
-	if( trace ) VKT("SubmitAndWait: UpdateBindlessSet done; SubmitCommands begin");
 	Commands->SubmitCommands( present, presentWidth, presentHeight, presentFullscreen );
-	if( trace ) VKT("SubmitAndWait: SubmitCommands done");
 
 	Batch.SceneIndexStart = 0;
 	SceneVertexPositions[CurrentFrameIndex] = 0;
@@ -392,8 +371,7 @@ void UVulkanRenderDevice::Flush()
 		ClearTextureCache();
 	}
 
-	// 219's URenderDevice has no PrecacheOnFlip; the engine drives precache via PrecacheTexture calls,
-	// which we service in DrawComplexSurface/Tile through TextureManager. Nothing to flag here.
+	// [KHG] 219's URenderDevice has no PrecacheOnFlip; precache is driven by PrecacheTexture calls serviced in DrawComplexSurface/Tile, so nothing to flag here.
 
 	unguard;
 }
@@ -409,9 +387,7 @@ void UVulkanRenderDevice::Lock( FPlane InFlashScale, FPlane InFlashFog, FPlane S
 	if( !Initialized )
 		return;
 
-	// Android sleep/resume: if there is no native window we are backgrounded — skip the frame entirely
-	// (IsLocked stays false, so Unlock no-ops). On resume with a NEW window, rebuild the surface and
-	// force the swapchain onto it before rendering.
+	// [KHG] Android sleep/resume: no native window means backgrounded, so skip the frame (IsLocked stays false); on a new window, rebuild the surface and swapchain before rendering.
 	ANativeWindow* awin = GetCurrentNativeWindow();
 	if( !awin )
 		return;
@@ -430,19 +406,13 @@ void UVulkanRenderDevice::Lock( FPlane InFlashScale, FPlane InFlashFog, FPlane S
 	ForceHitIndex = -1;
 	CurrentFrame = nullptr;   // force UpdateSceneNode to recompute the projection this frame
 
-	static int lockTrace = 80;
-	bool trace = (lockTrace > 0);
-	if( trace ) { lockTrace--; VKT("Lock: begin frame, CurrentFrameIndex=%u", CurrentFrameIndex); }
 
 	try
 	{
 		// If the frame textures no longer match the window, recreate them along with the scene pass.
 		if( !Textures->Scene || Textures->Scene->Width != Viewport->SizeX || Textures->Scene->Height != Viewport->SizeY || Textures->Scene->Multisample != GetSettingsMultisample() )
 		{
-			if( trace ) VKT("Lock: creating SceneTextures %dx%d", Viewport->SizeX, Viewport->SizeY);
-			// [KHG] idle BOTH in-flight frames before freeing/recreating the scene images, render pass and
-			// pipelines — these are NOT routed through the per-frame DeleteList, so the other in-flight frame
-			// could still be using them (use-after-free). Resolution changes are rare; the stall is fine.
+			// [KHG] idle both in-flight frames before freeing/recreating the scene images/pass/pipelines: they bypass the per-frame DeleteList, so the other frame may still be using them (use-after-free).
 			vkDeviceWaitIdle( Device->device );
 			Framebuffers->DestroySceneFramebuffer();
 			Textures->Scene.reset();
@@ -451,11 +421,9 @@ void UVulkanRenderDevice::Lock( FPlane InFlashScale, FPlane InFlashFog, FPlane S
 			RenderPasses->CreatePipelines();
 			Framebuffers->CreateSceneFramebuffer();
 			DescriptorSets->UpdateFrameDescriptors();
-			if( trace ) VKT("Lock: SceneTextures+renderpass+pipelines+framebuffer OK");
 		}
 
 		auto cmdbuffer = Commands->GetDrawCommands();
-		if( trace ) VKT("Lock: got draw commands");
 
 		VkAccessFlags srcColorAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
 		VkAccessFlags dstColorAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -485,12 +453,10 @@ void UVulkanRenderDevice::Lock( FPlane InFlashScale, FPlane InFlashFog, FPlane S
 		cmdbuffer->bindIndexBuffer(Buffers->SceneIndexBuffers[CurrentFrameIndex]->buffer, 0, VK_INDEX_TYPE_UINT32);
 
 		IsLocked = true;
-		if( trace ) VKT("Lock: scene render pass begun, IsLocked=1");
 	}
 	catch( const std::exception& e )
 	{
 		debugf( NAME_Warning, "VulkanDrv: Lock failed: %s", e.what() );
-		VKT("Lock: EXCEPTION %s", e.what());
 	}
 
 	unguard;
@@ -536,19 +502,13 @@ void UVulkanRenderDevice::Unlock( UBOOL Blit )
 	if( !Initialized || !IsLocked )
 		return;
 
-	static int unlockTrace = 80;
-	bool trace = (unlockTrace > 0);
-	if( trace ) { unlockTrace--; VKT("Unlock: begin"); }
 
 	try
 	{
 		DrawBatch( Commands->GetDrawCommands() );
-		if( trace ) VKT("Unlock: scene DrawBatch done");
 		Commands->GetDrawCommands()->endRenderPass();
-		if( trace ) VKT("Unlock: scene endRenderPass done");
 
 		BlitSceneToPostprocess();
-		if( trace ) VKT("Unlock: BlitSceneToPostprocess done");
 		if( Bloom )
 			RunBloomPass();
 
@@ -556,20 +516,15 @@ void UVulkanRenderDevice::Unlock( UBOOL Blit )
 		SDL_GetWindowSize( (SDL_Window*)WindowHandle, &windowWidth, &windowHeight );
 		if( windowWidth <= 0 || windowHeight <= 0 ) { windowWidth = Viewport->SizeX; windowHeight = Viewport->SizeY; }
 
-		if( trace ) VKT("Unlock: frame stats complex=%d gouraud=%d tiles=%d drawcalls=%d",
-			Stats.ComplexSurfaces, Stats.GouraudPolygons, Stats.Tiles, Stats.DrawCalls);
 		Stats.ComplexSurfaces = Stats.GouraudPolygons = Stats.Tiles = Stats.DrawCalls = 0;
 
-		if( trace ) VKT("Unlock: SubmitAndWait(present=%d, %dx%d) begin", Blit?1:0, windowWidth, windowHeight);
 		SubmitAndWait( Blit ? true : false, windowWidth, windowHeight, false );
-		if( trace ) VKT("Unlock: SubmitAndWait done");
 
 		Batch.Pipeline = nullptr;
 
 		if( Samplers->LODBias != LODBias )
 		{
-			// [KHG] idle the GPU before recreating samplers: the just-submitted frame's bindless descriptor
-			// set still references the old VkSamplers, which CreateSceneSamplers frees. LODBias changes are rare.
+			// [KHG] idle the GPU before recreating samplers: the just-submitted frame's bindless set still references the old VkSamplers that CreateSceneSamplers frees.
 			vkDeviceWaitIdle( Device->device );
 			DescriptorSets->ClearCache();
 			Textures->ClearAllBindlessIndexes();
@@ -630,14 +585,6 @@ void UVulkanRenderDevice::DrawBatch( VulkanCommandBuffer* cmdbuffer )
 	size_t icount = SceneIndexPos - Batch.SceneIndexStart;
 	if( icount > 0 )
 	{
-		static int dbTrace = 200;
-		if( dbTrace > 0 )
-		{
-			dbTrace--;
-			VKT("DrawBatch: pipe=%p icount=%zu start=%zu bindless=%p layout=%p", (void*)Batch.Pipeline,
-				icount, Batch.SceneIndexStart, (void*)DescriptorSets->GetBindlessSet(),
-				(void*)RenderPasses->Scene.BindlessPipelineLayout.get());
-		}
 		if( viewportdesc.minDepth != Batch.Pipeline->MinDepth || viewportdesc.maxDepth != Batch.Pipeline->MaxDepth )
 		{
 			viewportdesc.minDepth = Batch.Pipeline->MinDepth;
@@ -650,17 +597,12 @@ void UVulkanRenderDevice::DrawBatch( VulkanCommandBuffer* cmdbuffer )
 		cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, DescriptorSets->GetBindlessSet());
 		cmdbuffer->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScenePushConstants), &pushconstants);
 		cmdbuffer->drawIndexed(icount, 1, Batch.SceneIndexStart, 0, 0);
-		static int dbTrace2 = 200;
-		if( dbTrace2 > 0 ) { dbTrace2--; VKT("DrawBatch: drawIndexed OK"); }
 		Batch.SceneIndexStart = SceneIndexPos;
 		Stats.DrawCalls++;
 	}
 }
 
-// 219 has no SetSceneNode: recompute the projection from the FSceneNode whenever the frame changes.
-// FORWARD-Z perspective (mat4::frustum, near->0/far->1, zero_positive_w) to match the UT99 Scene
-// pipelines (depth clear 1.0, VK_COMPARE_OP_LESS). FOV from the engine's live FovAngle (what the GL
-// driver uses); fall back to DesiredFOV only if FovAngle is out of a sane range.
+// [KHG] 219 has no SetSceneNode: recompute the projection per frame. Forward-Z frustum (zero_positive_w) to match UT99's Scene pipelines (depth clear 1.0, COMPARE_OP_LESS); FOV from live FovAngle, falling back to DesiredFOV if out of range.
 void UVulkanRenderDevice::UpdateSceneNode( FSceneNode* Frame )
 {
 	guardSlow(UVulkanRenderDevice::UpdateSceneNode);
@@ -706,9 +648,7 @@ void UVulkanRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo& S
 
 	DWORD PolyFlags = ApplyPrecedenceRules( Surface.PolyFlags );
 
-	// 219 FTextureInfo has no UTexture backpointer (469 does), so mask purely off PolyFlags — exactly
-	// what the 219 OpenGL driver does. (The lean device's CacheID->UTexture mask-forcing hack is one of
-	// the port inventions this migration deliberately drops.)
+	// [KHG] 219 FTextureInfo has no UTexture backpointer, so mask purely off PolyFlags like the 219 GL driver (dropping the lean device's CacheID->UTexture mask-forcing hack).
 	CachedTexture* tex = Textures->GetTexture(Surface.Texture, (PolyFlags & PF_Masked) != 0);
 	CachedTexture* lightmap = Textures->GetTexture(Surface.LightMap, false);
 	CachedTexture* macrotex = Textures->GetTexture(Surface.MacroTexture, false);
@@ -916,21 +856,10 @@ void UVulkanRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Info, FLOAT
 	if( Frame != CurrentFrame )
 		UpdateSceneNode( Frame );
 
-	{
-		static int tileTrace = 25;
-		if( tileTrace > 0 )
-		{
-			tileTrace--;
-			VKT("DrawTile: X=%.0f Y=%.0f XL=%.0f YL=%.0f Z=%.2f pf=0x%x FX2=%.0f FY2=%.0f RFX2=%.4f RProjZ=%.3f",
-				X, Y, XL, YL, Z, (unsigned)PolyFlags, Frame->FX2, Frame->FY2, RFX2, RProjZ);
-		}
-	}
 
 	PolyFlags = ApplyPrecedenceRules( PolyFlags );
 
-	// TODO(KHG): FMV/ScriptedTexture tiles wrap 8-bit BGRA as TEXF_RGB32, which now routes through the
-	// lightmap <<1 uploader and would double-brighten. If FMV blows out, give realtime tiles a
-	// non-doubling upload path (pre-halve the source). Lightmaps ARE 7-bit so <<1 is correct for them.
+	// TODO(KHG): FMV/ScriptedTexture tiles wrap 8-bit BGRA as TEXF_RGB32 and route through the lightmap <<1 uploader (double-brightens); if FMV blows out, give realtime tiles a non-doubling path. (7-bit lightmaps need the <<1.)
 	CachedTexture* tex = Textures->GetTexture(&Info, (PolyFlags & PF_Masked) != 0);  // 219: no UTexture backpointer
 	float UMult = tex ? GetUMult(Info) : 0.0f;
 	float VMult = tex ? GetVMult(Info) : 0.0f;
@@ -1429,9 +1358,7 @@ void UVulkanRenderDevice::ReadPixels( FColor* Pixels )
 	cmdbuffer->copyImageToBuffer(dstimage->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging->buffer, 1, &region);
 
 	SubmitAndWait( false, 0, 0, false );
-	// [KHG] SubmitAndWait does NOT block (it submits + rotates the frame). Wait for the GPU copy to finish
-	// before mapping the staging buffer (otherwise garbage) and before the local dstimage/staging unique_ptrs
-	// are destroyed at function return (otherwise use-after-free of in-flight resources). Screenshots are rare.
+	// [KHG] SubmitAndWait doesn't block (it submits + rotates the frame), so idle the GPU before mapping the staging buffer and before the local dstimage/staging are destroyed at return (else garbage / use-after-free).
 	vkDeviceWaitIdle( Device->device );
 
 	uint8_t* pixels = (uint8_t*)staging->Map(0, w * h * 4);
@@ -1668,23 +1595,10 @@ void UVulkanRenderDevice::DrawPresentTexture( int width, int height )
 
 	auto cmdbuffer = Commands->GetDrawCommands();
 
-	static int dptTrace = 80;
-	bool trace = (dptTrace > 0);
-	if( trace )
-	{
-		dptTrace--;
-		VKT("DrawPresentTexture: shader=%d img=%p fb=%p rp=%p pipe=%p pset=%p", presentShader,
-			(void*)Commands->SwapChain->GetImage(Commands->PresentImageIndex),
-			(void*)Framebuffers->GetSwapChainFramebuffer(),
-			(void*)RenderPasses->Present.RenderPass.get(),
-			(void*)RenderPasses->Present.Pipeline[presentShader].get(),
-			(void*)DescriptorSets->GetPresentSet());
-	}
 
 	PipelineBarrier()
 		.AddImage(Commands->SwapChain->GetImage(Commands->PresentImageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
 		.Execute(cmdbuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-	if( trace ) VKT("DrawPresentTexture: swapchain barrier done");
 
 	RenderPassBegin()
 		.RenderPass(RenderPasses->Present.RenderPass.get())
@@ -1692,16 +1606,13 @@ void UVulkanRenderDevice::DrawPresentTexture( int width, int height )
 		.RenderArea(0, 0, Commands->SwapChain->Width(), Commands->SwapChain->Height())
 		.AddClearColor(0.0f, 0.0f, 0.0f, 1.0f)
 		.Execute(cmdbuffer);
-	if( trace ) VKT("DrawPresentTexture: present renderpass begun");
 	cmdbuffer->setViewport(0, 1, &viewport);
 	cmdbuffer->setScissor(0, 1, &scissor);
 	cmdbuffer->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, RenderPasses->Present.Pipeline[presentShader].get());
 	cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, RenderPasses->Present.PipelineLayout.get(), 0, DescriptorSets->GetPresentSet());
 	cmdbuffer->pushConstants(RenderPasses->Present.PipelineLayout.get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PresentPushConstants), &pushconstants);
-	if( trace ) VKT("DrawPresentTexture: bound pipe+descriptor, drawing");
 	cmdbuffer->draw(6, 1, 0, 0);
 	cmdbuffer->endRenderPass();
-	if( trace ) VKT("DrawPresentTexture: done");
 
 	PipelineBarrier()
 		.AddImage(Commands->SwapChain->GetImage(Commands->PresentImageIndex), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0)

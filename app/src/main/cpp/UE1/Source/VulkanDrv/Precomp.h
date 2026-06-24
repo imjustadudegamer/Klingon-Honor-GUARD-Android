@@ -26,14 +26,10 @@
 // UE1 engine render-device interface + scene structs (same header the GLES driver uses).
 #include "RenderPrivate.h"
 
-// [KHG Phase 4] UT99-manager compatibility shims for build-219:
-//  - 219's mipmap class is FMipmap (no FMipmapBase base type as in the 469 SDK). The managers refer to
-//    FMipmapBase*; alias it. FTextureInfo::Mips is FMipmap*[] in 219, same shape.
+// [KHG Phase 4] UT99-manager build-219 shim: 219 has no FMipmapBase base type, so alias it to FMipmap (same shape).
 typedef FMipmap FMipmapBase;
-//  - 219 Core has no BITFIELD type (only NEXT_BITFIELD/FIRST_BITFIELD macros). The UT99 managers + the
-//    device declare config flags as `BITFIELD`. Reproduce UT99's classic typedef so they compile.
+// [KHG Phase 4] 219 Core has no BITFIELD type; reproduce UT99's classic typedef so the managers/device compile.
 typedef DWORD BITFIELD;
-//  - Frames-in-flight + the current frame index are globals in the UT99 managers (469 Precomp had them).
-//    Defined in VulkanDrv.cpp; the device advances CurrentFrameIndex each Lock.
+// [KHG Phase 4] Frames-in-flight + current frame index are UT99-manager globals (defined in VulkanDrv.cpp; advanced each Lock).
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 extern uint32_t CurrentFrameIndex;

@@ -1374,9 +1374,7 @@ void UObject::execGreaterGreater_IntInt( FFrame& Stack, BYTE*& Result )
 }
 AUTOREGISTER_INTRINSIC( UObject, 149, execGreaterGreater_IntInt );
 
-// [KHG] build-219 Object '>>>' logical (unsigned) right shift, at intrinsic index
-// 196 (the modern engine renumbered/omitted it). Differs from '>>' only in that
-// the shift is unsigned, so the sign bit is not propagated.
+// [KHG] build-219 Object '>>>' logical (unsigned) right shift (intrinsic index 196, omitted by this engine); like '>>' but unsigned so the sign bit is not propagated.
 void UObject::execGreaterGreaterGreater_IntInt( FFrame& Stack, BYTE*& Result )
 {
 	guardSlow(UObject::execGreaterGreaterGreater_IntInt);
@@ -2457,11 +2455,7 @@ void UObject::execLog( FFrame& Stack, BYTE*& Result )
 }
 AUTOREGISTER_INTRINSIC( UObject, 231, execLog );
 
-// [KHG] Klingon Honor Guard's build-219 Object declares a name-bound native
-// 'LogStr' (looked up as intUObjectexecLogStr). It is a string logging helper,
-// behaviourally equivalent to Log. Implemented here and registered at a free
-// intrinsic index (600; highest stock index is 543, GIntrinsics size is 0x1000)
-// so the AUTOREGISTER macro also emits the named export the linker binds to.
+// [KHG] build-219 Object declares a name-bound native 'LogStr', a Log-equivalent string logging helper; implemented here and AUTOREGISTERed at a free intrinsic index (600) so the macro emits the named export the linker binds to.
 void UObject::execLogStr( FFrame& Stack, BYTE*& Result )
 {
 	guardSlow(UObject::execLogStr);

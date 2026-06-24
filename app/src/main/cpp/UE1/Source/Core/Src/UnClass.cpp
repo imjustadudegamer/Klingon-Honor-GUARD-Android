@@ -590,13 +590,7 @@ void UClass::Bind()
 		if( ClassPtr )
 			Constructor = ClassPtr->Constructor;
 		else if( !GIsEditor )
-			// [KHG] Klingon Honor Guard's build-219 packages mark a number of classes
-			// as intrinsic (native) that this later-lineage engine implements as plain
-			// script classes (e.g. Engine.Light and other early-Unreal native actors).
-			// There is no autoclass<Name> export for them, so binding the native
-			// constructor fails. Rather than fatally erroring, warn and fall through to
-			// the superclass-constructor chase below: the class then behaves as an
-			// ordinary script class, which is correct for these data-only actor types.
+			// [KHG] build-219 marks some classes intrinsic that this engine implements as script classes (e.g. Engine.Light), with no autoclass<Name> export; warn instead of fataling and fall through to the superclass-constructor chase so they behave as ordinary script classes.
 			debugf( NAME_Warning, "[KHG] No native impl for intrinsic class %s; using script-class (super constructor) fallback", GetPathName() );
 	}
 	if( !Constructor && GetSuperClass() )
@@ -1408,10 +1402,6 @@ void UFunction::Bind()
 			check(iIntrinsic<EX_Max);
 			check(GIntrinsics[iIntrinsic]!=NULL);
 			Func = GIntrinsics[iIntrinsic];
-			// [KHG-DIAG] KHG build-219 assigns some native indices this engine does not
-			// register (its slot is execUndefined). Log them so we can build the remap.
-			if( Func == &UObject::execUndefined )
-				debugf( NAME_Warning, "[KHG-DIAG] native '%s' wants intrinsic index %i (UNREGISTERED here)", GetPathName(), iIntrinsic );
 		}
 		else
 		{
@@ -1419,10 +1409,7 @@ void UFunction::Bind()
 			char Proc[256];
 			appSprintf( Proc, "int%sexec%s", GetOwnerClass()->GetNameCPP(), GetName() );
 			UPackage* ClassPackage = CastChecked<UPackage>( GetOwnerClass()->GetParent() );
-			// [KHG] Use the unchecked lookup so a missing name-bound native does not
-			// fatally abort load (KHG's build-219 packages declare a few native
-			// functions this engine lacks). Fall back to a safe stub and warn, so all
-			// missing natives surface in one run instead of one-fatal-per-rebuild.
+			// [KHG] Use the unchecked lookup so a missing name-bound native (KHG's build-219 declares a few this engine lacks) falls back to a safe stub with a warning instead of fatally aborting load.
 			void** Ptr = (void**)ClassPackage->GetDllExport( Proc, 0 );
 			if( Ptr )
 				*(void**)&Func = *Ptr;

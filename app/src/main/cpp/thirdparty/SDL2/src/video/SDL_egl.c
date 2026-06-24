@@ -1179,7 +1179,6 @@ void SDL_EGL_DeleteContext(_THIS, SDL_GLContext context)
 
 EGLSurface *SDL_EGL_CreateSurface(_THIS, NativeWindowType nw)
 {
-    SDL_Log("KHG_VK SDL_EGL_CreateSurface CALLED nw=%p (should NOT happen for a Vulkan window)", (void*)nw);
 #ifdef SDL_VIDEO_DRIVER_ANDROID
     EGLint format_wanted;
     EGLint format_got;

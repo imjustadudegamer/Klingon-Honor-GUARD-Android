@@ -13,15 +13,10 @@ TextureUploader* TextureUploader::GetUploader(ETextureFormat format)
 	{
 #if !defined(OLDUNREAL469SDK)
 
-		// [KHG build-219] UnTex.h defines only TEXF_P8(=0), TEXF_RGB32(=1, 32-bit truecolor), TEXF_RGB64(=2).
-		// In KHG the truecolor format (TEXF_RGB32) is 7-bit-per-channel (lightmaps, fog, ScriptedTextures):
-		// the retail OpenGL driver's ConvertBGRA7777_RGBA8888 doubles it (Ptr->R = 2*Src.B, ...). The
-		// BGRA8_LM uploader does exactly that (Src.B<<1 with B<->R swap), so this reproduces GL 1:1 — full
-		// lightmap => base*2 overbright (Scene.frag then *2.0 = correct GL overbright).
+		// [KHG build-219] 219's TEXF_RGB32 truecolor is 7-bit-per-channel (lightmaps/fog/ScriptedTextures); the BGRA8_LM uploader's <<1 (with B<->R swap) reproduces the retail GL ConvertBGRA7777_RGBA8888 doubling for correct overbright.
 		Uploaders[TEXF_P8].reset(new TextureUploader_P8());
 		Uploaders[TEXF_RGB32].reset(new TextureUploader_BGRA8_LM());
-		// TEXF_RGB64 (16-bit/channel) is not used by KHG content; leave unmapped (GetUploader -> nullptr,
-		// UploadManager falls back to a white texture so a stray RGB64 can't crash).
+		// TEXF_RGB64 is unused by KHG content; leave unmapped (GetUploader -> nullptr, UploadManager falls back to white so a stray RGB64 can't crash).
 
 #else
 
@@ -203,13 +198,7 @@ void TextureUploader_P8::UploadRect(void* d, FMipmapBase* mip, int x, int y, int
 	int pitch = mip->USize;
 	BYTE* src = mip->DataPtr + x + y * pitch;
 	FColor* Ptr = (FColor*)d;
-	// [KHG build-219] UE1-219 palettes leave FColor.A == 0 (alpha is unused; the original renderers
-	// derive mask alpha from the palette INDEX, not palette[idx].A). UT99VulkanDrv's verbatim uploader
-	// copied palette[idx].A, which is fine on OldUnreal-469 (A==255) but on 219 makes every opaque P8
-	// pixel alpha 0. For non-masked P8 (opaque world) the blend ignores alpha so it was invisible only
-	// in the alpha-test path: masked P8 (fonts/HUD glyphs) were all discarded => "menu but no text".
-	// Force opaque pixels to A=255 and index 0 -> transparent, exactly matching the working GLES driver
-	// (NOpenGLESDrv: `Masked ? (Index?255:0) : 255`).
+	// [KHG build-219] 219 palettes leave FColor.A==0 (mask alpha comes from the palette index, not .A); copying palette[idx].A (as UT99 does) made masked P8 glyphs all-discarded. Force opaque pixels to A=255, index 0 -> transparent, matching the GLES driver (`Masked ? (Index?255:0) : 255`).
 	if (masked)
 	{
 		FColor translucent(0, 0, 0, 0);

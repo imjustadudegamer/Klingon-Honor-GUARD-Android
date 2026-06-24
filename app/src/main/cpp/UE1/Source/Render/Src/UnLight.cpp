@@ -2162,11 +2162,7 @@ DWORD FLightManager::SetupForActor( FSceneNode* InFrame, AActor* InActor, FVolAc
 			{
 				if( NewNum!=i )
 					Senders[NewNum] = Senders[i];
-				// [KHG] UNREAL_ANDROID_LIGHTCACHE_NULLSENDER_V129: guard the null sender. A stale actor-light-
-				// cache entry can hold Actor==NULL; if GetIndexedObject(Index) is also NULL the original
-				// `NULL==NULL` passed the validity test and then dereferenced NULL->bDeleteMe (offset 0x28) →
-				// SIGSEGV in SetupForActor (hit after minutes of combat as dynamic lights spawn/despawn).
-				// Drop null senders, matching the existing `if(Senders[i].Actor)` guard at the consider loop below.
+				// [KHG] UNREAL_ANDROID_LIGHTCACHE_NULLSENDER_V129: guard null senders — a stale Actor==NULL cache entry passed the NULL==NULL validity test then dereferenced NULL->bDeleteMe (SIGSEGV in SetupForActor).
 				if( Senders[i].Actor && GObj.GetIndexedObject(Senders[i].Index)==Senders[i].Actor && !Senders[i].Actor->bDeleteMe )
 					NewNum++;
 			}

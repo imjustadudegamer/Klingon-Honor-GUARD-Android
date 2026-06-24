@@ -267,11 +267,7 @@ void FCollisionHash::RemoveActor( AActor* Actor )
 	check(Actor->bCollideActors);
 	if( Actor->bDeleteMe )
 		return;
-	// [KHG] UNREAL_ANDROID_COLHASH_MOVED_RECOVER_V130: stock UE1 calls appErrorf("moved without proper
-	// hashing") and ABORTS when Location!=ColLocation (e.g. a falling actor destroyed mid-move trips this).
-	// Recover instead of crashing: the actor's collision frags live in the cells covering where it was
-	// HASHED (ColLocation), so temporarily restore Location to ColLocation for the cell math, unhash from
-	// those cells, then put the real Location back — removes it cleanly, no stale frags, no fatal error.
+	// [KHG] UNREAL_ANDROID_COLHASH_MOVED_RECOVER_V130: recover instead of aborting when Location!=ColLocation by temporarily restoring Location to ColLocation for the cell math so frags unhash cleanly, then put the real Location back.
 	const FVector SavedLocation  = Actor->Location;
 	const UBOOL   bMovedUnhashed = ( Actor->Location != Actor->ColLocation );
 	if( bMovedUnhashed )

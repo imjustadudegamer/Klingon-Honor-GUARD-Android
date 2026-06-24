@@ -263,12 +263,7 @@ void APlayerPawn::execConsoleCommandResult( FFrame& Stack, BYTE*& Result )
 	P_GET_STRING(Command);
 	P_FINISH;
 
-	// [KHG] De-CD: Klingon Honor Guard's menus probe for the gameplay CD by issuing
-	// the "prsq" console query and expecting the reply "mpgameplay" when the disc is
-	// present (otherwise they show "Insert the Gameplay CD-ROM and press ENTER").
-	// On the original game this was answered by Windows copy-protection code that does
-	// not exist in this Android port, so the probe returns empty and gameplay is
-	// blocked. Answer it affirmatively so the game runs disc-free.
+	// [KHG] De-CD: the menus probe for the gameplay CD via the "prsq" console query expecting "mpgameplay" (else "Insert the Gameplay CD-ROM"); the original Windows copy-protection answering it doesn't exist in this port, so answer affirmatively to run disc-free.
 	if( appStricmp( Command, "prsq" )==0 )
 	{
 		appStrcpy( (char*)Result, "mpgameplay" );
@@ -1536,9 +1531,7 @@ void APawn::CheckEnemyVisible()
 	uclock(XLevel->SeePlayer);
 	if ( Enemy )
 	{
-		// [KHG] was check(Enemy->IsValid()) — a stale Enemy (target gibbed/destroyed but the reference not
-		// yet cleared) FATALLY aborted this per-tick AI sight check in combat. Recover: drop the stale enemy
-		// (IsValid is the engine's own safe stale-pointer test) instead of crashing.
+		// [KHG] was check(Enemy->IsValid()) which fatally aborted this per-tick AI sight check on a stale Enemy (target gibbed but reference not cleared); drop the stale enemy via IsValid instead of crashing.
 		if ( !Enemy->IsValid() )
 			Enemy = NULL;
 		if ( Enemy && !LineOfSightTo(Enemy) )

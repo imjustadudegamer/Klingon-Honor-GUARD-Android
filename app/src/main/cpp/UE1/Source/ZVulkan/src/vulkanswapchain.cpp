@@ -179,10 +179,7 @@ bool VulkanSwapChain::CreateSwapchain(int width, int height, int imageCount, boo
 		swapChainCreateInfo.pQueueFamilyIndices = nullptr;
 	}
 
-	// [KHG] Android pre-rotation fix: setting preTransform = currentTransform tells the compositor the
-	// app pre-rotated its content. We render unrotated, so that yields a 90/270 deg rotated display on
-	// phone-class panels whose native orientation is portrait. Prefer IDENTITY (let the display engine
-	// rotate for us) when the surface supports it; fall back to currentTransform otherwise.
+	// [KHG] Android pre-rotation fix: we render unrotated, so preTransform=currentTransform rotates the display 90/270 deg on portrait-native panels. Prefer IDENTITY (display engine rotates) when supported, else currentTransform.
 	if (caps.Capabilites.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
 		swapChainCreateInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 	else

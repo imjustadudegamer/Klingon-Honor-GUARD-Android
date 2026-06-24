@@ -695,22 +695,6 @@ void URender::DrawActorSprite( FSceneNode* Frame, FDynamicSprite* Sprite )
 	PUSH_HIT(Frame,HActor, Sprite->Actor);
 	DWORD PolyFlags = GetPolyFlags(Frame,Sprite->Actor);
 
-	// [KHG-SPRITEDIAG] The "killed thing shows its 2D mesh" square is a DT_Sprite billboard (a flat
-	// screen-facing quad of the actor's texture). Log each sprite-drawing actor CLASS once with its
-	// texture + style so we can identify and fix it.
-	if( Sprite->Actor && ( Sprite->Actor->DrawType==DT_Sprite || Sprite->Actor->DrawType==DT_SpriteAnimOnce ) && Sprite->Actor->Texture )
-	{
-		static TArray<FName> SprSeen;
-		FName cn = Sprite->Actor->GetClass()->GetFName();
-		UBOOL s=0; for( INT k=0;k<SprSeen.Num();++k ) if(SprSeen(k)==cn){s=1;break;}
-		if( !s )
-		{
-			SprSeen.AddItem(cn);
-			debugf( NAME_Log, "[KHG-SPRITEDIAG] sprite class='%s' tex='%s' style=%i scale=%.1f glow=%.2f",
-				Sprite->Actor->GetClass()->GetName(), Sprite->Actor->Texture->GetName(),
-				(INT)Sprite->Actor->Style, Sprite->Actor->DrawScale, Sprite->Actor->ScaleGlow );
-		}
-	}
 
 	// Draw the actor.
 	if

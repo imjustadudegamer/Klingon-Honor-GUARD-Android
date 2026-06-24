@@ -129,7 +129,7 @@ public class MainActivity extends Activity {
         msg.setText("No fully readable Unreal data folder was found.\n\n" +
                 "Select the 'Unreal' folder or import a ZIP file containing the Unreal data.\n\n" +
                 "The selected folder or ZIP file must contain at least:\n" +
-                "System/Core.u\nSystem/Engine.u\nSystem/UnrealI.u or System/UnrealShare.u\nMaps/*.unr" + extra);
+                "System/Core.u\nSystem/Engine.u\nSystem/Klingons.u\nMaps/*.unr" + extra);
         msg.setTextSize(16);
         msg.setGravity(Gravity.CENTER);
         msg.setPadding(0, 24, 0, 24);

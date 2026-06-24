@@ -352,10 +352,7 @@ UBOOL UGameEngine::Browse( FURL URL, char* Error256 )
 		if( GLevel && GLevel->GetLevelInfo()->HubStackLevel>0 )
 		{
 			char Filename[256], SavedPortal[256], Bare[64];
-			// [KHG] Android: same FURL '/'-parsing trap as the LOAD path below — FURL treats the '/' in a
-			// multi-slash save path as URL portal/trailing-slash delimiters and rejects it (Valid=0), so the
-			// hub pop produced an invalid travel URL. Build from the slash-FREE basename (valid parse, sets
-			// Valid + inherited options), then set Map to the full path directly (FURL never re-parses Map).
+			// [KHG] Android: FURL rejects the multi-slash save path as Valid=0 (treats '/' as portal/trailing delimiters), so build the URL from the slash-FREE basename then set Map to the full path directly (FURL never re-parses Map).
 			appSprintf( Filename, "%s" PATH_SEPARATOR "Game%i.usa", PATH(GSys->SavePath), GLevel->GetLevelInfo()->HubStackLevel-1 );
 			appSprintf( Bare, "Game%i.usa", GLevel->GetLevelInfo()->HubStackLevel-1 );
 			appStrcpy( SavedPortal, *URL.Portal );
@@ -378,12 +375,7 @@ UBOOL UGameEngine::Browse( FURL URL, char* Error256 )
 		// Handle restarting.
 		guard(LoadURL);
 		char Temp[256], Bare[64], Error256[256];
-		// [KHG] Android: the save path uses '/' separators. FURL's text parser treats '/' as URL
-		// portal/trailing-slash delimiters and REJECTS a multi-slash path as Valid=0 (on Windows the
-		// path used '\', which FURL ignores) — so "%s/Save%i.usa?load" parsed to an invalid URL and the
-		// menu Load silently did nothing. Earlier we only fixed the '\'->'/' filesystem-open half; this
-		// fixes the parse half. Parse a slash-FREE dummy (sets the "load" option + Valid correctly), then
-		// point Map at the real file path directly so it is never re-parsed.
+		// [KHG] Android: FURL rejects the multi-slash '/' save path as Valid=0 (treats '/' as portal/trailing delimiters), so menu Load silently did nothing; parse a slash-FREE dummy (sets the "load" option + Valid), then point Map at the real file path directly so it is never re-parsed.
 		appSprintf( Bare, "Save%i.usa?load", appAtoi(Option) );
 		appSprintf( Temp, "%s" PATH_SEPARATOR "Save%i.usa", PATH(GSys->SavePath), appAtoi(Option) );
 		FURL LoadFileURL( &LastURL, Bare, TRAVEL_Partial );
@@ -876,23 +868,17 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, char* Err
 // Draw a global view.
 //
 #if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
-// [KHG] FMV compositing hooks, implemented in NSDLDrv/FMVPlayer.cpp; resolved at the final
-// libUnreal link (no CMake dependency needed between the Engine and NSDLDrv static modules).
+// [KHG] FMV compositing hooks, implemented in NSDLDrv/FMVPlayer.cpp; resolved at the final libUnreal link (no CMake dependency between the Engine and NSDLDrv static modules).
 extern "C" int  UE1FMVIsActive( void );
 extern "C" void UE1FMVDrawActiveFrame( void );
 extern "C" int  UE1FMVGetFrameBGRA( const unsigned char** outData, int* outW, int* outH );
 extern "C" int  UE1FMVIsComposite( void );
 extern "C" int  UE1FMVGetOverlayBGRA( const unsigned char** outData, int* outW, int* outH );
 
-// [KHG] Present the active FMV's current frame through the render device's DrawTile (Vulkan + GLES).
-// bBlackBackdrop: also paint a full-screen black rect first, so when this is drawn ON TOP of the
-// menu/HUD (full-screen movies) nothing shows through the letterbox bars.
+// [KHG] Present the active FMV's current frame via the render device DrawTile (Vulkan + GLES); bBlackBackdrop also paints a full-screen black rect first so when drawn ON TOP of the menu/HUD nothing shows through the letterbox bars.
 static void UE1FMVPresentFrame( UViewport* Viewport, FSceneNode* Frame, UBOOL bBlackBackdrop )
 {
-	// Paint the black backdrop FIRST and UNCONDITIONALLY (for on-top movies): it covers the world +
-	// HUD/menu AND the stale 3D frame that lingers while a large clip (intro.avi ~140MB) is still being
-	// opened, before the first frame decodes. (The legacy UE1FMVBlackout uses SDL_GL swaps, which are a
-	// no-op under Vulkan, so without this the last engine frame flashes through.)
+	// Paint the black backdrop FIRST and UNCONDITIONALLY: it covers world + HUD/menu AND the stale 3D frame that lingers while a large clip (intro.avi ~140MB) opens before its first frame decodes (legacy UE1FMVBlackout uses SDL_GL swaps which no-op under Vulkan, so without this the last engine frame flashes through).
 	if( bBlackBackdrop && Viewport->RenDev )
 		Viewport->RenDev->Draw2DPoint( Frame, FPlane(0,0,0,1), 0, 0.f, 0.f, Frame->FX, Frame->FY );
 
@@ -923,18 +909,12 @@ static void UE1FMVPresentFrame( UViewport* Viewport, FSceneNode* Frame, UBOOL bB
 	FLOAT Scale = Min( Sx / (FLOAT)FMVW, Sy / (FLOAT)FMVH );
 	FLOAT Dw = (FLOAT)FMVW * Scale, Dh = (FLOAT)FMVH * Scale;
 	FLOAT Dx = ( Sx - Dw ) * 0.5f, Dy = ( Sy - Dh ) * 0.5f;
-	// [KHG] Content is drawn FULL/OPAQUE. For composite (framed) clips the overlay drawn masked ON TOP
-	// (below) carries the exact flood-filled window alpha and does ALL the masking — so the content needs
-	// no cut here. (Was: PF_Masked + a hardcoded hex-cut in UE1FMVGetFrameBGRA, which could disagree with
-	// the real window and push the character off-center / ring the edge — both removed.)
+	// [KHG] Content drawn FULL/OPAQUE; for composite clips the masked overlay drawn ON TOP (below) carries the window alpha and does ALL the masking, so the content needs no cut here (replaces the old PF_Masked + hardcoded hex-cut that could mis-center/ring the edge).
 	DWORD FMVFlags = PF_NoSmooth;
 	Viewport->RenDev->DrawTile( Frame, FMVInfo, Dx, Dy, Dw, Dh, 0.f, 0.f, (FLOAT)FMVW, (FLOAT)FMVH,
 		NULL, 1.f, FPlane(1,1,1,1), FPlane(0,0,0,0), FMVFlags );
 
-	// [KHG] Composite clips: draw the retained decorated Klingon console-frame overlay (buildup.avi's
-	// final frame, alpha-masked: ornate border opaque, hex window alpha=0) ON TOP of the hex content,
-	// at the same letterbox rect. This is the Vulkan equivalent of the GL DrawComposite path: the border
-	// frames the character, the window lets the content show through. (Barely-moving still frame.)
+	// [KHG] Composite clips: draw the retained alpha-masked Klingon console-frame overlay (buildup.avi final frame: ornate border opaque, hex window alpha=0) ON TOP of the hex content at the same letterbox rect — the Vulkan equivalent of the GL DrawComposite path.
 	const unsigned char* OvData = NULL; INT OvW = 0, OvH = 0;
 	if( UE1FMVIsComposite() && UE1FMVGetOverlayBGRA( &OvData, &OvW, &OvH ) && OvData && OvW > 0 && OvH > 0 )
 	{
@@ -1014,12 +994,7 @@ void UGameEngine::Draw( UViewport* Viewport, BYTE* HitData, INT* HitSize )
 	if( Frame->X>0 && Frame->Y>0 )
 		Render->DrawWorld( Frame );
 #if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
-	// [KHG] FMV (playavi) present. While ANY clip is active — the full-screen intro (flag N), the
-	// new-game mission briefing (flag Y), or an in-game comm cutscene — present it ON TOP of the world
-	// AND the HUD/menu, with a black backdrop. The KHG menu (KlingonHUDIntroNull::PostRender) keeps
-	// drawing the main menu during the blocking playavi loop; presenting under it (the old split) let the
-	// menu composite over the briefing. Drawing on top after PostRender guarantees the movie is what the
-	// player sees. (The decorated comm-console frame overlay is a separate, still-GL feature.)
+	// [KHG] FMV (playavi) present: while ANY clip is active, present it ON TOP of the world AND HUD/menu with a black backdrop. The KHG menu keeps drawing during the blocking playavi loop, so presenting under it let the menu composite over the briefing; drawing on top after PostRender guarantees the movie is what the player sees.
 	const UBOOL bFMVActive = UE1FMVIsActive();
 #endif
 	Viewport->RenDev->EndFlash();
@@ -1283,9 +1258,7 @@ void UGameEngine::Tick( FLOAT DeltaSeconds )
 	TickCycles=LocalTickCycles;
 #if defined(PLATFORM_ANDROID) // UNREAL_ANDROID_PERF_PROFILE_V1 — CPU frame breakdown to Khg.log (grep KHG_PERF)
 	{
-		// game = GLevel->Tick (AI/physics/script); render+present = Client->Tick (canvas + Vulkan submit,
-		// which BLOCKS on the 2-frame fence, so a high value here with low game = GPU/vsync-bound, not CPU).
-		// [KHG] logging pulled: OFF by default; set env KHG_PERF (UE1_ANDROID_* style) to re-enable.
+		// [KHG] perf breakdown: game = GLevel->Tick (AI/physics/script); render+present = Client->Tick (canvas + Vulkan submit, blocks on the 2-frame fence so high here with low game = GPU/vsync-bound). OFF by default; set env KHG_PERF to re-enable.
 		static const bool kPerfOn = ( getenv("KHG_PERF") != NULL );
 		if( kPerfOn )
 		{
