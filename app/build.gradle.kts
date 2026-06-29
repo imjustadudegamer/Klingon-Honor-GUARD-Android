@@ -1,6 +1,3 @@
-import java.io.FileInputStream
-import java.util.Properties
-
 plugins {
     id("com.android.application")
 }
@@ -9,38 +6,9 @@ plugins {
 // patches are committed directly under src/main/cpp. There is no download or
 // codegen step — CMake builds the tree as-is. See docs/ARCHITECTURE.md.
 
-// Release signing is configured only if a local keystore.properties exists
-// (it is gitignored and never committed). Without it, the release build is
-// produced unsigned and you can sign it yourself.
-val keystorePropertiesFile = rootProject.file("keystore.properties")
-val hasKeystore = keystorePropertiesFile.exists()
-val keystoreProperties = Properties().apply {
-    if (hasKeystore) FileInputStream(keystorePropertiesFile).use { load(it) }
-}
-
 android {
     namespace = "com.khg.android"
     compileSdk = 36
-
-    signingConfigs {
-        if (hasKeystore) {
-            create("release") {
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
-            }
-        }
-    }
-
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-            if (hasKeystore) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-        }
-    }
 
     tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
         options.compilerArgs.addAll(listOf("-Xlint:none"))

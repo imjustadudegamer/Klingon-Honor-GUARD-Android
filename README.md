@@ -28,7 +28,8 @@ CD + patches, or an existing PC install) and you supply its data files yourself.
 - **In-app data import** — if no game data is found at launch, the app lets you pick your retail
   `Unreal` data folder or a ZIP of it with the system file picker and copies it into place. No
   storage permission is required.
-
+- **Android lifecycle** — the Vulkan surface and swapchain are rebuilt correctly on
+  background → foreground (sleep/resume).
 
 ## Screenshot
 

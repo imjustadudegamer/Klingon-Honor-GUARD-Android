@@ -59,6 +59,7 @@ UVulkanRenderDevice::UVulkanRenderDevice()
 	BloomAmount = 128;
 	LODBias = 0.0f;
 	LightMode = 0;          // [KHG] GL parity: no actor *1.5 (flag 32), no lightmap*2 disable (flag 64)
+	GlideGamma = 1;         // [KHG] 3dfx-style look: present gamma = 0.5+1.5*Brightness; 0 = old flat Brightness*2.0
 	GammaCorrectScreenshots = 1;
 	VkDeviceIndex = 0;
 	VkDebug = 0;
@@ -73,6 +74,7 @@ void UVulkanRenderDevice::InternalClassInitializer( UClass* Class )
 	new(Class, "Contrast",         RF_Public) UByteProperty ( CPP_PROPERTY(Contrast),         "Options", CPF_Config );
 	new(Class, "Saturation",       RF_Public) UByteProperty ( CPP_PROPERTY(Saturation),       "Options", CPF_Config );
 	new(Class, "LODBias",          RF_Public) UFloatProperty( CPP_PROPERTY(LODBias),          "Options", CPF_Config );
+	new(Class, "GlideGamma",       RF_Public) UBoolProperty ( CPP_PROPERTY(GlideGamma),       "Options", CPF_Config );
 	new(Class, "VkDeviceIndex",    RF_Public) UIntProperty  ( CPP_PROPERTY(VkDeviceIndex),    "Options", CPF_Config );
 	new(Class, "VkDebug",          RF_Public) UBoolProperty ( CPP_PROPERTY(VkDebug),          "Options", CPF_Config );
 	unguard;
@@ -924,7 +926,8 @@ vec4 UVulkanRenderDevice::ApplyInverseGamma( vec4 color )
 {
 	if( Viewport->IsOrtho() )
 		return color;
-	float brightness = Clamp( (float)(Viewport->Client->Brightness * 2.0), 0.05f, 2.99f );
+	// [KHG] 3dfx-style gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
+	float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 	float gammaRed = Max( brightness + GammaOffset + GammaOffsetRed, 0.001f );
 	float gammaGreen = Max( brightness + GammaOffset + GammaOffsetGreen, 0.001f );
 	float gammaBlue = Max( brightness + GammaOffset + GammaOffsetBlue, 0.001f );
@@ -1530,7 +1533,8 @@ PresentPushConstants UVulkanRenderDevice::GetPresentPushConstants()
 	}
 	else
 	{
-		float brightness = Clamp( (float)(Viewport->Client->Brightness * 2.0), 0.05f, 2.99f );
+		// [KHG] 3dfx-style gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
+		float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 
 		if( GammaMode == 0 )
 		{

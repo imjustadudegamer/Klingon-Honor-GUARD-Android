@@ -74,7 +74,7 @@ UNSDLClient::UNSDLClient()
 	AndroidResolutionMode = 0; // UE1_ANDROID_RESOLUTION_MENU_NATIVE_FIXED_CLEAN_V83
 	AndroidNativeController = true; // ANDROID_NATIVE_CONTROLLER_BACKEND_V88
 	AndroidNativeDirectInput = true; // UNREAL_ANDROID_CONTROLLER_DIRECT_V122
-	AndroidNativeRightStickScale = 2.50f; // UNREAL_ANDROID_RIGHTSTICK_DEFAULT_SENSITIVITY_V126 (moderate; live-tunable in Default.ini — effective value was stuck at 1.0 before the Java-patcher fix)
+	AndroidNativeRightStickScale = 3.00f; // UNREAL_ANDROID_RIGHTSTICK_DEFAULT_SENSITIVITY_V142 (bumped from 2.50 per request — a touch faster look; live-tunable in Default.ini)
 	AndroidNativeLeftStickScale  = 2.50f; // ANDROID_LEFTSTICK_NATIVE_SENSITIVITY_V127 (replaces hardcoded 1.35f; ini-tunable)
 	AndroidNativeRightStickSmoothing = 1; // ANDROID_RIGHT_STICK_SMOOTHING_TOGGLE_V129 (set False in ini for raw, max-responsive look)
 	AndroidNativeLeftStickDeadzone = 0.06f; // ANDROID_NATIVE_CONTROLLER_LEFT_STICK_SMOOTHER_LINEAR_V100

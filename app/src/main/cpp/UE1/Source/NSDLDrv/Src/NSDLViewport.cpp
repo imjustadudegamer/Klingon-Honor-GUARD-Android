@@ -93,6 +93,8 @@ static volatile INT GAndroidTouchMenuVisibleV124 = 0; // UNREAL_ANDROID_TOUCH_OV
 static FLOAT GAndroidTouchLookXV124 = 0.0f; // UNREAL_ANDROID_TOUCH_OVERLAY_V125 / UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131
 static FLOAT GAndroidTouchLookYV124 = 0.0f; // UNREAL_ANDROID_TOUCH_OVERLAY_V125 / UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131
 static FLOAT GAndroidTouchLookNextLogV131 = 0.0f; // UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131 / UNREAL_ANDROID_TOUCH_STICKS_RESTORE_V132
+static UBOOL GAndroidDuckToggledV142 = 0; // UNREAL_ANDROID_CROUCH_TOGGLE_V142 (sticky crouch state for the physical pad)
+static volatile INT GAndroidUiMenuingV142 = 0; // UNREAL_ANDROID_TOUCH_LCARS_V142 strict navigable-menu flag (Menuing only)
 
 static UBOOL UE1AndroidCleanDispatchKeyCaptureV86( UNSDLViewport* Viewport, INT Key );
 
@@ -466,6 +468,15 @@ static SWORD UE1AndroidNativeFloatToAxis( FLOAT Value, FLOAT Deadzone, FLOAT Cur
 	return (SWORD)Clamp( (INT)( Filtered * 32767.0f ), -32767, 32767 );
 }
 
+static UBOOL UE1AndroidNativeBindingIsDuckV142( UNSDLViewport* Viewport, INT Key )
+{
+	// UNREAL_ANDROID_CROUCH_TOGGLE_V142: true when this engine key is bound to the Duck alias
+	// (default Joy2/Joy8/C). Used to turn the physical crouch button into a toggle.
+	if( !Viewport || !Viewport->Input || Key <= 0 || Key >= IK_MAX )
+		return 0;
+	return UE1AndroidNativeBindingStartsWithAliasV96( *Viewport->Input->Bindings[Key], "Duck" );
+}
+
 static FLOAT UE1AndroidNativeSmoothRightStickAxisV116( INT Axis, FLOAT Target )
 {
 	// ANDROID_RIGHT_STICK_JITTER_HYSTERESIS_V120
@@ -641,6 +652,22 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nat
 {
 	// UNREAL_ANDROID_TOUCH_OVERLAY_V125
 	return GAndroidTouchMenuVisibleV124 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" int UE1FMVIsActive( void ); // FMVPlayer.cpp — nonzero while a cutscene/FMV is on screen
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nativeAndroidIsCutsceneV142( JNIEnv*, jclass )
+{
+	// UNREAL_ANDROID_TOUCH_FMV_SKIP_V142: the Java overlay queries this so it can release the
+	// touch during an FMV; the tap then reaches SDL and FMVPlayer::PollSkip (SDL_FINGERDOWN)
+	// skips the clip exactly like a normal screen tap on the bare surface.
+	return UE1FMVIsActive() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nativeAndroidIsUiMenuV142( JNIEnv*, jclass )
+{
+	// UNREAL_ANDROID_TOUCH_LCARS_V142: strict navigable-menu (Menuing) flag for the overlay.
+	return GAndroidUiMenuingV142 ? JNI_TRUE : JNI_FALSE;
 }
 
 static void UE1AndroidTouchLookPushUT99V131( FLOAT X, FLOAT Y )
@@ -2640,6 +2667,15 @@ UBOOL UNSDLViewport::TickInput()
 			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "Console"
 		);
 	GAndroidTouchMenuVisibleV124 = bAndroidTouchAnyMenuV124 ? 1 : 0; // UNREAL_ANDROID_TOUCH_OVERLAY_V125
+	// UNREAL_ANDROID_TOUCH_LCARS_V142: STRICT navigable-menu flag for the touch overlay.
+	// The broad flag above also covers the "Console" state, which KHG's UWindow console
+	// holds during normal gameplay — using it would wrongly put the overlay in menu mode
+	// (stick->nav, FIRE->confirm) and suppress the in-game auto-fade. This flag is true
+	// only for the actual arrow-navigable menu, matching the native bIsInUI key mapping.
+	GAndroidUiMenuingV142 = ( Console &&
+		((UObject*)Console)->GetMainFrame() &&
+		((UObject*)Console)->GetMainFrame()->StateNode &&
+		((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "Menuing" ) ? 1 : 0;
 	if( bAndroidNativeController )
 	{
 		if( bAndroidNativeDirectInput && ( bAndroidNativeNormalMenu || bAndroidNativeKeyMenuing ) )
@@ -2957,6 +2993,21 @@ UBOOL UNSDLViewport::TickInput()
 						{
 							CauseInputEvent( Key, IST_Press );
 							CauseInputEvent( Key, IST_Release );
+						}
+						continue;
+					}
+
+					// UNREAL_ANDROID_CROUCH_TOGGLE_V142: a physical-pad button bound to "Duck"
+					// toggles a sticky crouch (matching the on-screen overlay) instead of
+					// hold-to-crouch. Each press flips the state; the release and key-repeats
+					// are swallowed so crouch persists until the next press.
+					if( UE1AndroidNativeBindingIsDuckV142( this, Key ) )
+					{
+						if( bPressed && NE.RepeatCount == 0 )
+						{
+							GAndroidDuckToggledV142 = !GAndroidDuckToggledV142;
+							GAndroidNativeButtonPressed[Key] = GAndroidDuckToggledV142;
+							CauseInputEvent( Key, GAndroidDuckToggledV142 ? IST_Press : IST_Release );
 						}
 						continue;
 					}

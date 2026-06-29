@@ -80,6 +80,7 @@ class DLL_EXPORT UVulkanRenderDevice : public URenderDevice
 	BYTE     AntialiasMode;
 	BYTE     GammaMode;
 	BYTE     LightMode;
+	BITFIELD GlideGamma;   // [KHG] present gamma uses the 3dfx Glide ramp (0.5+1.5*Brightness) vs the flat Brightness*2.0
 	BITFIELD GammaCorrectScreenshots;
 	INT      VkDeviceIndex;
 	BITFIELD VkDebug;
