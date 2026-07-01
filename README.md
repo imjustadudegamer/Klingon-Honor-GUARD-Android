@@ -83,9 +83,6 @@ Exact `adb push` commands for manual staging are in **[docs/BUILD.md](docs/BUILD
 
 This is a work in progress and is still being play-tested. Known issues:
 
-- **No on-screen touch controls yet** — there is no virtual stick / button overlay in this
-  implementation. A physical gamepad is required to play; touch input currently only skips
-  cutscenes. An on-screen control scheme is planned.
 - **Some effects and fine FMV compositing details** are still being refined.
 - **Long-session engine stability** — the original UE1 game logic has latent actor-lifecycle
   edge cases that can surface after extended combat; these are being fixed reactively.
