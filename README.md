@@ -21,15 +21,11 @@ CD + patches, or an existing PC install) and you supply its data files yourself.
 - **On-device FMV** — the intro movie, the MicroProse splash, mission briefings, and the
   decorated Klingon comm-frame cutscenes all decode and play through a bundled LGPL FFmpeg build.
 - **Save / load** — saving and loading game state works through the engine's hub/save system.
-- **Gamepad** — a console-FPS-style gamepad layout with ini-tunable stick sensitivity and a
-  low-latency right-stick look filter. A physical controller is currently required to play
-  (see [Known issues](#known-issues)).
-- **Handheld-friendly UI** — scalable 2D fonts and HUD for small high-DPI screens.
+- **Touch screen controls and external gamepad support** — a console-FPS-style gamepad layout with ini-tunable stick sensitivity and a low-latency right-stick look filter.
+- **Handheld-friendly UI** — semi scalable 2D fonts and HUD for small high-DPI screens.
 - **In-app data import** — if no game data is found at launch, the app lets you pick your retail
   `Unreal` data folder or a ZIP of it with the system file picker and copies it into place. No
   storage permission is required.
-- **Android lifecycle** — the Vulkan surface and swapchain are rebuilt correctly on
-  background → foreground (sleep/resume).
 
 ## Screenshot
 
