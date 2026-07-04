@@ -24,8 +24,8 @@ android {
         applicationId = "com.khg.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.7.0"
+        versionCode = 3
+        versionName = "0.8.0"
 
         ndk {
             // Ship both ABIs: the proven 32-bit path plus arm64-v8a for modern devices.
