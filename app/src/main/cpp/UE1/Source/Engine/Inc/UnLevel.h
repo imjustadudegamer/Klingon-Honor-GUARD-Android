@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnLevel.h: ULevel definition.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -306,3 +307,4 @@ protected:
 /*-----------------------------------------------------------------------------
 	The End.
 -----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

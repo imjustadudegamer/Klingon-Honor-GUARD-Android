@@ -28,7 +28,8 @@ android {
         versionName = "0.7.0"
 
         ndk {
-            abiFilters += listOf("armeabi-v7a")
+            // Ship both ABIs: the proven 32-bit path plus arm64-v8a for modern devices.
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
 
         externalNativeBuild {

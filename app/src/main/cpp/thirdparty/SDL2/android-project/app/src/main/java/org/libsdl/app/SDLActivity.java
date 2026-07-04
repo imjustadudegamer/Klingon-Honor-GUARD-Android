@@ -710,7 +710,12 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
 
-                    mSDLThread = new Thread(new SDLMain(), "SDLThread");
+                    // KHG: give the C app thread a large (32 MB) stack. UE1's
+                    // garbage collector (FArchiveTagUsed) walks the whole object
+                    // reference graph recursively; on 64-bit (arm64) each frame is
+                    // ~2x, overflowing the ~1 MB default Java-thread stack during
+                    // level load. Desktop Unreal uses an 8-16 MB main stack; match it.
+                    mSDLThread = new Thread(null, new SDLMain(), "SDLThread", 32L * 1024 * 1024);
                     mSurface.enableSensor(Sensor.TYPE_ACCELEROMETER, true);
                     mSDLThread.start();
 

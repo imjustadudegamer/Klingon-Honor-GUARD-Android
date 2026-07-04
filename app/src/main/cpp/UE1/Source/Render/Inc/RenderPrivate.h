@@ -27,6 +27,8 @@
 
 #include "UnSpan.h"
 
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity
+
 #define LINE_NEAR_CLIP_Z   1.0
 #define MAKELABEL(A,B,C,D) A##B##C##D
 
@@ -532,3 +534,4 @@ extern RENDER_API URender* GRender;
 /*------------------------------------------------------------------------------------
 	The End.
 ------------------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

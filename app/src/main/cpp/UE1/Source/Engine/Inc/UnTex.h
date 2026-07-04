@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnTex.h: Unreal texture related classes.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -401,3 +402,4 @@ class ENGINE_API UFont : public UTexture
 /*----------------------------------------------------------------------------
 	The End.
 ----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnObjBas.h: Unreal object base class.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -530,6 +531,14 @@ private:
 		{ appErrorf( "UObject copy constructor operator called" ); }
 public:
 
+	// [KHG] Byte offset of the first script-exposed header field (Object.Outer == the
+	// C++ Parent member). Stock .u reserve the preceding header (vtable + Index +
+	// HashNext/MainFrame/Linker + LinkerIndex) with an int[] placeholder sized for
+	// 32-bit pointers; on LP64 the reservation must grow to this so Outer/Name/Class
+	// (and all subclass vars) stay aligned with the C++ layout. (Member function, so
+	// it may read the private Parent offset.)
+	static INT StaticHeaderReserve() { return (INT)( (BYTE*)&((UObject*)NULL)->Parent - (BYTE*)NULL ); }
+
 	// Constructors.
 	UObject();
 	UObject( EIntrinsicConstructor, UClass* InClass, FName InName, FName InPackageName );
@@ -988,3 +997,4 @@ public:
 /*----------------------------------------------------------------------------
 	The End.
 ----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

@@ -132,6 +132,12 @@ typedef int64_t  SQWORD; // 64-bit signed.
 typedef int32_t  UBOOL;  // Boolean 0 (false) or 1 (true).
 typedef double   DOUBLE; // 64-bit IEEE double.
 
+// Pointer-width integer types (32-bit on armeabi-v7a, 64-bit on arm64-v8a).
+// Use these instead of INT/DWORD whenever a pointer value must be held in an
+// integer (e.g. alignment math) so nothing is truncated on LP64 builds.
+typedef intptr_t  PTRINT;  // Signed integer the size of a pointer.
+typedef uintptr_t UPTRINT; // Unsigned integer the size of a pointer.
+
 #ifndef PLATFORM_WIN32 // On Windows these are defined in minwindef.h.
 // Unsigned base types.
 typedef uint8_t  BYTE;   // 8-bit  unsigned.

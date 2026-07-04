@@ -278,6 +278,25 @@ inline INT FFrame::ReadInt()
 	Code += sizeof(INT);
 	return Result;
 }
+inline UObject* FFrame::ReadObject()
+{
+#if PLATFORM_64BIT
+	// On 64-bit, object references are stored in the bytecode as 4-byte global
+	// object indices (see UStruct::SerializeExpr's XFEROBJ), NOT raw 8-byte
+	// pointers. This keeps the in-memory script byte layout identical to the
+	// 32-bit / on-disk layout, so precompiled code offsets and ScriptSize from
+	// stock 32-bit .u packages stay valid. Resolve the index back to a pointer.
+	INT Index = *(INT*)Code;
+	Code += sizeof(INT);
+	return (Index==INDEX_NONE) ? NULL : GObj.GetIndexedObject(Index);
+#else
+	// On 32-bit, references are raw pointers (sizeof == 4, same width as the
+	// on-disk-implied slot), read them directly.
+	UObject* Result = *(UObject**)Code;
+	Code += sizeof(UObject*);
+	return Result;
+#endif
+}
 inline FLOAT FFrame::ReadFloat()
 {
 	FLOAT Result = *(FLOAT*)Code;

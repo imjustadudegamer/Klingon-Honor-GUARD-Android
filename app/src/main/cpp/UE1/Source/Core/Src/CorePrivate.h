@@ -9,6 +9,8 @@
 
 #include "Core.h"
 
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity
+
 /*-----------------------------------------------------------------------------
 	UTextBufferFactory.
 -----------------------------------------------------------------------------*/
@@ -30,3 +32,4 @@ class CORE_API UTextBufferFactory : public UFactory
 /*-----------------------------------------------------------------------------
 	The End.
 -----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

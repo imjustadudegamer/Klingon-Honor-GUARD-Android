@@ -521,7 +521,7 @@ BYTE* FMemCache::Create
 	// BestFirst->Data + BestFirst->Size.
 	BYTE* Result = Align( BestFirst->Data, Alignment );
 	check( Result + CreateSize <= BestFirst->LinearNext->Data );
-	debug( ((INT)Result & (Alignment-1)) == 0 );
+	debug( ((PTRINT)Result & (Alignment-1)) == 0 );
 
 	// Claim BestFirst for the block we're creating, and lock it.
 	BestFirst->Time = (FCacheItem::TCacheTime)Time;

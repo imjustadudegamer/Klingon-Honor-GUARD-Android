@@ -31,6 +31,7 @@ struct CORE_API FFrame
 	void Step( UObject* Context, BYTE*& Result );
 	void CDECL ScriptWarn( UBOOL Critical, char* Fmt, ... );
 	INT ReadInt();
+	UObject* ReadObject(); // Reads a pointer-sized object reference from bytecode.
 	FLOAT ReadFloat();
 	INT ReadWord();
 	FName ReadName();

@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnCon.h: UConsole game-specific definition
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -108,3 +109,4 @@ private:
 /*------------------------------------------------------------------------------
 	The End.
 ------------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

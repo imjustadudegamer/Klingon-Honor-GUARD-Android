@@ -471,7 +471,7 @@ void FLightManager::ShadowMapGen( FTextureInfo& Tex, BYTE* SrcBits, BYTE* Dest1 
 		appMemset( Dest1, 127, ShadowMaskSpace*8 );
 		return;
 	}
-	debug(((INT)Dest1 & 3)==0);
+	debug(((PTRINT)Dest1 & 3)==0);
 
 	// Generate smooth shadow map by convolving the shadow bitmask with a smoothing filter.
 	INT Size4 = (ShadowMaskU*8)/4;
@@ -1264,7 +1264,7 @@ static void global_Flicker( AActor* Owner, FLOAT& Brightness, FVector& Color )
 {
 	guardSlow(global_Flicker);
 
-	FLOAT Random = GRandoms->RandomBase((int)Owner);
+	FLOAT Random = GRandoms->RandomBase((INT)(PTRINT)Owner);
 	if( Random < 0.5 )	Brightness = 0.0;
 	else				Brightness *= Random;
 	unguardSlow;

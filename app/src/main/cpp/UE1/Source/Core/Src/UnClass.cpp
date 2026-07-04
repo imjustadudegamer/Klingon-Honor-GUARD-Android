@@ -8,6 +8,40 @@
 
 #include "CorePrivate.h"
 
+#if PLATFORM_64BIT
+#include <string>
+#include <unordered_map>
+// Native-class C++ size registry (LP64 correctness).
+// UStruct::LinkOffsets rebuilds a class's PropertiesSize from its *script*
+// properties only. On 64-bit that omits the natural-aligned UObject header
+// (wider vtable + pointer fields) and any native-only C++ members (e.g.
+// UTexture::Mips), so intrinsic classes come out smaller than their real C++
+// sizeof. Since objects are allocated with GetPropertiesSize() (UnObj.cpp
+// StaticAllocateObject), that under-allocates instances and their tail
+// object-ref fields read uninitialized memory (the GC then follows a garbage
+// pointer and crashes). The only place the true size is known is the DLL-init
+// autoregistry constructor, before LinkOffsets can clobber it; record it here
+// keyed by class name (prefix-stripped, matching UObject::GetName()) and have
+// UClass::Serialize floor PropertiesSize back to it on load. 32-bit is
+// unaffected (pointers are 4 bytes, so the recompute already matches sizeof).
+static std::unordered_map<std::string,unsigned>& GNativeClassSizes()
+{
+	static std::unordered_map<std::string,unsigned> Map;
+	return Map;
+}
+void UE1RegisterNativeClassSize( const char* Name, unsigned Size )
+{
+	unsigned& S = GNativeClassSizes()[Name];
+	if( Size > S )
+		S = Size;
+}
+unsigned UE1LookupNativeClassSize( const char* Name )
+{
+	std::unordered_map<std::string,unsigned>::const_iterator It = GNativeClassSizes().find( Name );
+	return It==GNativeClassSizes().end() ? 0u : It->second;
+}
+#endif
+
 /*-----------------------------------------------------------------------------
 	FPropertyTag.
 -----------------------------------------------------------------------------*/
@@ -343,7 +377,30 @@ void UStruct::LinkOffsets( FArchive& Ar )
 		if( Property && Field->GetParent()==this )
 		{
 			Property->Link( Ar, Prev );
-			PropertiesSize = Property->Offset + Property->GetSize();
+			INT PropSize = Property->GetSize();
+#if PLATFORM_64BIT
+			// A native class with a second (multiple-inheritance) C++ base —
+			// UPlayer/UConsole/UTextBuffer (: FOutputDevice), USubsystem (: FExec),
+			// ULevelBase (: FNetworkNotify) — reserves that base's vtable pointer in
+			// the script layout via a placeholder int var named "vf..." (e.g. vfOut).
+			// Stock .u declare it 4 bytes (32-bit pointer), but the C++ vtable pointer
+			// is 8 bytes on LP64, which would skew every following var off the C++
+			// layout (breaking e.g. Player.Console access). Reserve a full pointer.
+			// Reservation placeholders declared as int in stock .u must grow on LP64:
+			//  - Object.ObjectInternal reserves the UObject header before Outer(=Parent);
+			//    size it to the real 64-bit header offset.
+			//  - vf*/vtbl* reserve a second (multiple-inheritance) C++ base's vtable ptr.
+			if( Cast<UIntProperty>(Property) )
+			{
+				const char* PN = Property->GetName();
+				if( appStricmp(PN,"ObjectInternal")==0 )
+					PropSize = UObject::StaticHeaderReserve() - Property->Offset;
+				else if( appStrfind(PN,"vf") || appStrfind(PN,"vtbl") || appStrfind(PN,"vtable")
+				     ||  appStrfind(PN,"Vf") || appStrfind(PN,"Vtbl") || appStrfind(PN,"VTbl") )
+					PropSize = (INT)sizeof(void*);
+			}
+#endif
+			PropertiesSize = Property->Offset + PropSize;
 			Prev = Property;
 		}
 	}
@@ -935,6 +992,30 @@ void UClass::Serialize( FArchive& Ar )
 	// Defaults.
 	if( Ar.IsLoading() )
 	{
+#if PLATFORM_64BIT
+		// Adopt the real C++ sizeof for intrinsic (native) classes. LinkOffsets
+		// rebuilds instance size from the *script* property chain only, so on LP64
+		// it omits the natural-aligned UObject header and any native-only C++
+		// members (e.g. UTexture's Mips), under-sizing native classes. Objects are
+		// allocated with GetPropertiesSize() (UnObj.cpp StaticAllocateObject), so
+		// under-sizing under-allocates the instance and its tail object-ref fields
+		// read uninitialized memory -> the GC's FArchiveTagUsed then follows a
+		// garbage pointer and crashes. The autoclass<Name> DLL export is the
+		// IMPLEMENT_CLASS registrant whose PropertiesSize is sizeof(TClass); adopt
+		// it. Classes with no native impl (e.g. Engine.Light) resolve NULL and keep
+		// their script size, exactly like UClass::Bind's fallback. Property offsets
+		// are unchanged (see UObjectProperty/UStrProperty::Link pack(4) alignment),
+		// and stock 32-bit .u are unaffected (this whole block is 64-bit only).
+		if( GetFlags() & RF_Intrinsic )
+		{
+			unsigned NativeSize = UE1LookupNativeClassSize( GetName() );
+			if( (INT)NativeSize > PropertiesSize )
+				PropertiesSize = (INT)NativeSize;
+		}
+		// Fallback: every UObject-derived instance is at least sizeof(UObject).
+		if( PropertiesSize < (INT)sizeof(UObject) )
+			PropertiesSize = (INT)sizeof(UObject);
+#endif
 		Defaults.SetNum(GetPropertiesSize());
 		check(Defaults.Num()>=sizeof(UObject));
 		if( GetSuperClass() )
@@ -1030,6 +1111,13 @@ UClass::UClass
 	SuperField			= InSuperClass!=this ? InSuperClass : NULL;
 	ClassGuid			= InGuid;
 
+#if PLATFORM_64BIT
+	// Record the real C++ sizeof before LinkOffsets can clobber PropertiesSize on
+	// load (see the registry note at the top of this file). InNameStr+1 strips the
+	// U/A prefix to match UObject::GetName().
+	UE1RegisterNativeClassSize( InNameStr+1, InSize );
+#endif
+
 	// Init defaults.
 	Defaults.SetNum( InSize );
 	appMemset( &Defaults(0), 0, InSize );
@@ -1103,6 +1191,34 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 	guard(SerializeExpr);
 	#define XFER(T) {Ar << *(T*)&Script(iCode); iCode += sizeof(T); }
 
+	// XFEROBJ transfers an object reference operand of the bytecode. On 32-bit it
+	// is a raw pointer (4 bytes) exactly like XFER(T*). On 64-bit we instead store
+	// a 4-byte global object index in the script so the in-memory bytecode layout
+	// stays byte-identical to the 32-bit / on-disk layout — this is what lets a
+	// stock 32-bit-compiled .u package load on a 64-bit build, because every
+	// precompiled code offset and the serialized ScriptSize remain valid. The
+	// on-disk bytes are unchanged (the archive still serializes the object as a
+	// compact index). Read side: FFrame::ReadObject.
+	#if PLATFORM_64BIT
+		#define XFEROBJ(T) \
+			{ \
+				if( Ar.IsLoading() ) \
+				{ \
+					UObject* _Obj=NULL; Ar << _Obj; \
+					*(INT*)&Script(iCode) = _Obj ? (INT)_Obj->GetIndex() : (INT)INDEX_NONE; \
+				} \
+				else \
+				{ \
+					INT _Idx = *(INT*)&Script(iCode); \
+					UObject* _Obj = (_Idx==INDEX_NONE) ? NULL : GObj.GetIndexedObject(_Idx); \
+					Ar << _Obj; \
+				} \
+				iCode += sizeof(INT); \
+			}
+	#else
+		#define XFEROBJ(T) XFER(T*)
+	#endif
+
 	// Get expr token.
 	XFER(BYTE);
 	Expr = (EExprToken)Script(iCode-1);
@@ -1128,7 +1244,7 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		case EX_InstanceVariable:
 		case EX_DefaultVariable:
 		{
-			XFER(UProperty*);
+			XFEROBJ(UProperty);
 			break;
 		}
 		case EX_BoolVariable:
@@ -1151,7 +1267,7 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		}
 		case EX_IntrinsicParm:
 		{
-			XFER(UProperty*);
+			XFEROBJ(UProperty);
 			break;
 		}
 		case EX_ClassContext:
@@ -1178,7 +1294,7 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		}
 		case EX_FinalFunction:
 		{
-			XFER(UStruct*); // Stack node.
+			XFEROBJ(UStruct); // Stack node.
 			while( SerializeExpr( iCode, Ar ) != EX_EndFunctionParms ); // Parms.
 			break;
 		}
@@ -1199,7 +1315,7 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		}
 		case EX_ObjectConst:
 		{
-			XFER(UObject*);
+			XFEROBJ(UObject);
 			break;
 		}
 		case EX_NameConst:
@@ -1231,13 +1347,13 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		}
 		case EX_MetaCast:
 		{
-			XFER(UClass*);
+			XFEROBJ(UClass);
 			SerializeExpr( iCode, Ar );
 			break;
 		}
 		case EX_DynamicCast:
 		{
-			XFER(UClass*);
+			XFEROBJ(UClass);
 			SerializeExpr( iCode, Ar );
 			break;
 		}
@@ -1321,14 +1437,14 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		case EX_StructCmpEq:
 		case EX_StructCmpNe:
 		{
-			XFER(UStruct*); // Struct.
+			XFEROBJ(UStruct); // Struct.
 			SerializeExpr( iCode, Ar ); // Left expr.
 			SerializeExpr( iCode, Ar ); // Right expr.
 			break;
 		}
 		case EX_StructMember:
 		{
-			XFER(UProperty*); // Property.
+			XFEROBJ(UProperty); // Property.
 			SerializeExpr( iCode, Ar ); // Inner expr.
 			break;
 		}
@@ -1373,6 +1489,34 @@ void UFunction::Serialize( FArchive& Ar )
 	// Replication info.
 	if( FunctionFlags & FUNC_Net )
 		Ar << RepOffset;
+
+#if PLATFORM_64BIT
+	// ParmsSize and ReturnValueOffset are serialized as baked *32-bit* values by the
+	// stock UCC. On LP64 a pointer-width parameter (object/class ref, string) is 8
+	// bytes, so the baked ParmsSize under-counts the parameter block: ProcessEvent's
+	// appMemcpy(Locals, Parms, ParmsSize) would then copy too few bytes and truncate
+	// an object argument (high 32 bits left zero), and the return value would be read
+	// at the wrong offset. UStruct::Serialize above already relinked the parameters
+	// with correct 64-bit offsets; recompute both from them (this function's own
+	// children only — parameters live at the front of the frame).
+	if( Ar.IsLoading() )
+	{
+		INT NewParmsSize = 0;
+		for( UField* F=Children; F; F=F->Next )
+		{
+			UProperty* P = Cast<UProperty>( F );
+			if( P && (P->PropertyFlags & CPF_Parm) )
+			{
+				INT End = P->Offset + P->GetSize();
+				if( End > NewParmsSize )
+					NewParmsSize = End;
+				if( P->PropertyFlags & CPF_ReturnParm )
+					ReturnValueOffset = P->Offset;
+			}
+		}
+		ParmsSize = NewParmsSize;
+	}
+#endif
 
 	unguard;
 }

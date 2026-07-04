@@ -5,6 +5,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# 16 KB page alignment for arm64-v8a: Android 15+ and modern arm64 devices use a
+# 16 KB memory page size, and every loaded .so must have 16 KB-aligned LOAD
+# segments or the app fails to load. The NDK r27 clang driver still defaults to
+# 4 KB, so force it here. Declared before the add_subdirectory() calls so it
+# propagates to all targets (Unreal, SDL2, OpenAL, libxmp, ZVulkan). armeabi-v7a
+# is left at its 4 KB default (all v7a devices use 4 KB pages).
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    add_link_options("-Wl,-z,max-page-size=16384")
+endif()
+
 set(UE1_ROOT "${CMAKE_CURRENT_LIST_DIR}/UE1")
 set(SDL2_ROOT "${CMAKE_CURRENT_LIST_DIR}/thirdparty/SDL2")
 set(OPENAL_ROOT "${CMAKE_CURRENT_LIST_DIR}/thirdparty/openal-soft")

@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnTemplate.h: Unreal templates.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -36,7 +37,7 @@ template< class T > inline T Clamp( const T X, const T Min, const T Max )
 }
 template< class T > inline T Align( const T Ptr, INT Alignment )
 {
-	return (T)(((DWORD)Ptr + Alignment - 1) & ~(Alignment-1));
+	return (T)(((UPTRINT)Ptr + Alignment - 1) & ~(UPTRINT)(Alignment-1));
 }
 template< class T > inline void Exchange( T& A, T& B )
 {
@@ -86,9 +87,10 @@ template< class T > void LittleEndianRef( T& Val )
 #define ARRAY_COUNT( array ) \
 	( sizeof(array) / sizeof((array)[0]) )
 
-// Offset of a struct member.
+// Offset of a struct member. Go through PTRINT (pointer-width) first so the
+// address isn't truncated on LP64; the offset itself is small and fits in INT.
 #define STRUCT_OFFSET( struc, member ) \
-	( (int)&((struc*)NULL)->member )
+	( (INT)(PTRINT)&((struc*)NULL)->member )
 
 /*-----------------------------------------------------------------------------
 	Dynamic array template.
@@ -580,3 +582,4 @@ enum {INDEX_NONE	= -1         };
 /*-----------------------------------------------------------------------------
 	The End.
 -----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

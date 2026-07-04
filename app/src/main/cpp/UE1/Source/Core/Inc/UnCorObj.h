@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnCorObj.h: Standard core object definitions.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -155,3 +156,4 @@ class CORE_API USystem : public USubsystem
 /*----------------------------------------------------------------------------
 	The End.
 ----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

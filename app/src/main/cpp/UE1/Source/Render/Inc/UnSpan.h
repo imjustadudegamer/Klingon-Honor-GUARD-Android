@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnSpan.h: Span buffering functions and structures
 	Copyright 1995 Epic MegaGames, Inc.
@@ -113,3 +114,4 @@ public:
 /*------------------------------------------------------------------------------------
 	The End.
 ------------------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

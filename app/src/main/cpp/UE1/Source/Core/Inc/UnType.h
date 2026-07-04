@@ -1,3 +1,4 @@
+#pragma pack(push,4) // KHG: restore MSVC /Zp4 uniform 4-byte packing on GCC/Clang for LP64 layout parity (see UnClass.cpp native-size registry)
 /*=============================================================================
 	UnType.h: Unreal engine base type definitions.
 	Copyright 1997 Epic MegaGames, Inc. This software is a trade secret.
@@ -300,7 +301,15 @@ class CORE_API UObjectProperty : public UProperty
 	}
 	void Link( FArchive& Ar, UProperty* Prev )
 	{
+		// Native classes are #pragma pack(4) (CoreClasses.h/EngineClasses.h), so an
+		// 8-byte pointer is 4-aligned in the C++ struct. Align to 4 (not sizeof) on
+		// LP64 to match, or the recomputed offset drifts past the real C++ offset and
+		// VERIFY_CLASS_OFFSET fails. GetElementSize() still returns the true 8 bytes.
+#if PLATFORM_64BIT
+		Offset = Align( GetParentStruct()->PropertiesSize, 4 );
+#else
 		Offset = Align( GetParentStruct()->PropertiesSize, sizeof(UObject*) );
+#endif
 	}
 	UBOOL Identical( const void* A, const void* B ) const
 	{
@@ -462,7 +471,14 @@ class CORE_API UStrProperty : public UProperty
 	}
 	void Link( FArchive& Ar, UProperty* Prev )
 	{
+		// FString holds a pointer; native classes are #pragma pack(4), so it is
+		// 4-aligned in C++. Match on LP64 (see UObjectProperty::Link). ElementSize
+		// stays sizeof(FString) (16 on LP64).
+#if PLATFORM_64BIT
+		Offset = Align( GetParentStruct()->PropertiesSize, 4 );
+#else
 		Offset = Align( GetParentStruct()->PropertiesSize, sizeof(void*) );
+#endif
 	}
 	UBOOL Identical( const void* A, const void* B ) const
 	{
@@ -625,3 +641,4 @@ inline UBOOL UStruct::StructCompare( const void* A, const void* B )
 /*-----------------------------------------------------------------------------
 	The End.
 -----------------------------------------------------------------------------*/
+#pragma pack(pop) // KHG

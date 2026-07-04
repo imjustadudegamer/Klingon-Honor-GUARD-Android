@@ -73,7 +73,7 @@ UInput::UInput()
 		UStruct* DynamicStringStruct=FindObject<UStruct>(ANY_PACKAGE,"DynamicString");
 		for( INT i=0; i<IK_MAX; i++ )
 			if( *GetKeyName((EInputKey)i) )
-				new(Class,GetKeyName((EInputKey)i),RF_Public)UStructProperty( EC_CppProperty, (INT)&((UInput*)NULL)->Bindings[i], "RawKeys", CPF_Config, DynamicStringStruct );
+				new(Class,GetKeyName((EInputKey)i),RF_Public)UStructProperty( EC_CppProperty, (INT)(PTRINT)&((UInput*)NULL)->Bindings[i], "RawKeys", CPF_Config, DynamicStringStruct );
 
 		// Load config.
 		Class->GetDefaultObject()->LoadConfig( NAME_Config );

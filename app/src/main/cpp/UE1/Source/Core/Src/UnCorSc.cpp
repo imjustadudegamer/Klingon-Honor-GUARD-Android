@@ -202,7 +202,7 @@ void UObject::execLocalVariable( FFrame& Stack, BYTE*& Result )
 
 	debug(Stack.Object==this);
 	debug(Stack.Locals!=NULL);
-	GProperty = ((UProperty*)Stack.ReadInt());
+	GProperty = ((UProperty*)Stack.ReadObject());
 	Result = Stack.Locals + GProperty->Offset;
 
 	unguardexecSlow;
@@ -213,7 +213,7 @@ void UObject::execInstanceVariable( FFrame& Stack, BYTE*& Result )
 {
 	guardSlow(UObject::execInstanceVariable);
 
-	GProperty = (UProperty*)Stack.ReadInt();
+	GProperty = (UProperty*)Stack.ReadObject();
 	Result = (BYTE*)this + GProperty->Offset;
 
 	unguardexecSlow;
@@ -224,7 +224,7 @@ void UObject::execDefaultVariable( FFrame& Stack, BYTE*& Result )
 {
 	guardSlow(UObject::execDefaultVariable);
 
-	GProperty = (UProperty*)Stack.ReadInt();
+	GProperty = (UProperty*)Stack.ReadObject();
 	Result = &GetClass()->Defaults(GProperty->Offset);
 
 	unguardexecSlow;
@@ -295,7 +295,16 @@ void UObject::execBoolVariable( FFrame& Stack, BYTE*& Result )
 	// Get bool variable.
 	GBoolAddr = NULL;
 	BYTE B = *Stack.Code++;
+	// Peek (do NOT consume) the following variable expression's object operand to
+	// learn which bool property this is; the nested intrinsic below reads and
+	// advances past it. On 64-bit the operand is a 4-byte object index (see
+	// FFrame::ReadObject / XFEROBJ), not a raw pointer, so resolve it by index.
+#if PLATFORM_64BIT
+	INT _BoolIdx = *(INT*)Stack.Code;
+	UBoolProperty* Property = (_BoolIdx==INDEX_NONE) ? NULL : (UBoolProperty*)GObj.GetIndexedObject(_BoolIdx);
+#else
 	UBoolProperty* Property = *(UBoolProperty**)Stack.Code;
+#endif
 	(this->*GIntrinsics[B])( Stack, *(BYTE**)&GBoolAddr );
 	GProperty = Property;
 
@@ -330,7 +339,7 @@ AUTOREGISTER_INTRINSIC( UObject, EX_Nothing, execNothing );
 
 void UObject::execIntrinsicParm( FFrame& Stack, BYTE*& Result )
 {
-	Result = Stack.Locals + ((UProperty*)Stack.ReadInt())->Offset;
+	Result = Stack.Locals + ((UProperty*)Stack.ReadObject())->Offset;
 }
 AUTOREGISTER_INTRINSIC( UObject, EX_IntrinsicParm, execIntrinsicParm );
 
@@ -558,7 +567,7 @@ void UObject::execFinalFunction( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execFinalFunction);
 
 	// Call the final function.
-	CallFunction( Stack, Result, (UFunction*)Stack.ReadInt() );
+	CallFunction( Stack, Result, (UFunction*)Stack.ReadObject() );
 
 	unguardexecSlow;
 }
@@ -584,8 +593,7 @@ void UObject::execStructCmpEq( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execStructCmpEq);
 
 	// Get struct.
-	UStruct* Struct = *(UStruct**)Stack.Code;
-	Stack.Code += sizeof(UStruct*);
+	UStruct* Struct = (UStruct*)Stack.ReadObject();
 
 	// Get first expression.
 	BYTE Buffer1[255], *Addr1=Buffer1;
@@ -607,8 +615,7 @@ void UObject::execStructCmpNe( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execStructCmpNe);
 
 	// Get struct.
-	UStruct* Struct = *(UStruct**)Stack.Code;
-	Stack.Code += sizeof(UStruct*);
+	UStruct* Struct = (UStruct*)Stack.ReadObject();
 
 	// Get first expression.
 	BYTE Buffer1[MAX_STRING_CONST_SIZE], *Addr1=Buffer1;
@@ -630,7 +637,7 @@ void UObject::execStructMember( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execStructMember);
 
 	// Get structure element.
-	UProperty* Property = (UProperty*)Stack.ReadInt();
+	UProperty* Property = (UProperty*)Stack.ReadObject();
 
 	// Get struct expression.
 	BYTE Buffer[255], *Addr = Result ? Buffer : NULL;
@@ -677,7 +684,7 @@ AUTOREGISTER_INTRINSIC( UObject, EX_StringConst, execStringConst );
 void UObject::execObjectConst( FFrame& Stack, BYTE*& Result )
 {
 	guardSlow(UObject::execObjectConst);
-	*(UObject**)Result = (UObject*)Stack.ReadInt();
+	*(UObject**)Result = (UObject*)Stack.ReadObject();
 	unguardexecSlow;
 }
 AUTOREGISTER_INTRINSIC( UObject, EX_ObjectConst, execObjectConst );
@@ -773,7 +780,7 @@ void UObject::execDynamicCast( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execDynamicCast);
 
 	// Get destination class of dynamic actor class.
-	UClass* Class = (UClass *)Stack.ReadInt();
+	UClass* Class = (UClass *)Stack.ReadObject();
 
 	// Compile actor expression.
 	BYTE Buffer[MAX_CONST_SIZE], *Addr=Buffer;
@@ -791,7 +798,7 @@ void UObject::execMetaCast( FFrame& Stack, BYTE*& Result )
 	guardSlow(UObject::execMetaCast);
 
 	// Get destination class of dynamic actor class.
-	UClass* MetaClass = (UClass*)Stack.ReadInt();
+	UClass* MetaClass = (UClass*)Stack.ReadObject();
 
 	// Compile actor expression.
 	BYTE Buffer[MAX_CONST_SIZE], *Addr=Buffer;
@@ -2820,9 +2827,34 @@ void UObject::CallFunction( FFrame& Stack, BYTE*& Result, UFunction* Function )
 		NewStack.Code++;
 		BYTE* Dest = NewStack.Locals;
 		FOutParmRec Outs[MAX_FUNC_PARMS], *Out = Outs;
+#if PLATFORM_64BIT
+		// Stock .u bakes each parameter's *32-bit* size into the bytecode. On LP64 a
+		// pointer-width argument (object/class ref, string, etc.) is 8 bytes, so the
+		// byte-count appMemcpy below would copy only its low 4 bytes into the zeroed
+		// Locals, leaving the pointer truncated (high 32 bits zero) -> the callee then
+		// dereferences a bad pointer and crashes (e.g. GameInfo.IsRelevant's `Other`).
+		// Drive placement and size from the function's relinked parameter properties,
+		// whose Offset/GetSize() are correct for this ABI. Children iteration order
+		// matches the baked parameter order (LinkOffsets uses the same order), so the
+		// N-th passed parm here lines up with the N-th evaluated argument.
+		UField* ParmField = Function->Children;
+#endif
 		while( (Out->Size = *NewStack.Code++) != 0 )
 		{
 			debug(*NewStack.Code==0 || *NewStack.Code==1);
+#if PLATFORM_64BIT
+			for( ; ParmField; ParmField=ParmField->Next )
+			{
+				UProperty* P = Cast<UProperty>( ParmField );
+				if( P && (P->PropertyFlags & CPF_Parm) && !(P->PropertyFlags & CPF_ReturnParm) )
+				{
+					Dest      = NewStack.Locals + P->Offset;
+					Out->Size = P->GetSize();
+					ParmField = ParmField->Next;
+					break;
+				}
+			}
+#endif
 			Out->Src = Out->Dest = Dest;
 			Stack.Step( Stack.Object, Out->Dest );
 			if( Out->Dest != Dest )

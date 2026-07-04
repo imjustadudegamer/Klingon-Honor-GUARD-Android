@@ -1158,9 +1158,12 @@ void FObjectManager::PreRegister( UObject* InObject, FName InPackageName )
 	}
 	else
 	{
-		// Add to the autoregistry chain.
-		InObject->LinkerIndex = (INT)AutoRegister;
-		*(FName*)&InObject->Linker = InPackageName;
+		// Add to the autoregistry chain. Chain via the pointer-width Linker
+		// field: LinkerIndex is only 32 bits and would truncate the object
+		// pointer on 64-bit (arm64). The package FName is a single INT, so it
+		// fits exactly in the 32-bit LinkerIndex instead.
+		InObject->Linker = (ULinkerLoad*)AutoRegister;
+		*(FName*)&InObject->LinkerIndex = InPackageName;
 		AutoRegister = InObject;
 	}
 }
@@ -1245,8 +1248,8 @@ void FObjectManager::Init()
 	UObject* Next;
 	for( UObject* Object=AutoRegister; Object!=NULL; Object=Next )
 	{
-		Next = (UObject*)Object->LinkerIndex;
-		Register( Object, *(FName*)&Object->Linker );
+		Next = (UObject*)Object->Linker;
+		Register( Object, *(FName*)&Object->LinkerIndex );
 		Object->Linker      = NULL;
 		Object->LinkerIndex = INDEX_NONE;
 		if( Object->GetClass()==UClass::StaticClass )
