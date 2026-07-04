@@ -34,7 +34,11 @@
 	Private definitions.
 ----------------------------------------------------------------------------*/
 
-typedef unsigned long   unsigned32;
+// unsigned32 must be exactly 32 bits: this DCE UUID code casts it over 4-byte
+// buffers (uuid_t::time_low, the 6-byte node id, FGuid). `unsigned long` is 8
+// bytes on LP64 (arm64), which overruns those buffers and smashes the stack.
+// `unsigned int` is 4 bytes on both armeabi-v7a and arm64.
+typedef unsigned int    unsigned32;
 typedef unsigned short  unsigned16;
 typedef unsigned char   unsigned8;
 typedef unsigned char   byte;
