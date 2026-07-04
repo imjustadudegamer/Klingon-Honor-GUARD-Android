@@ -692,7 +692,7 @@ CORE_API void* appRealloc( void* Ptr, INT NewSize, const char* Tag )
 	return realloc( Ptr, NewSize );
 #endif
 
-	unguardf(( "%08X %i %s", (INT)Ptr, NewSize, Tag ));
+	unguardf(( "%p %i %s", (void*)Ptr, NewSize, Tag ));
 }
 
 /*-----------------------------------------------------------------------------
