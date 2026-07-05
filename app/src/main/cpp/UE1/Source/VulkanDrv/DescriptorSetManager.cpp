@@ -104,11 +104,12 @@ void DescriptorSetManager::CreatePresentLayout()
 void DescriptorSetManager::CreatePresentSet()
 {
 	Present.Pool = DescriptorPoolBuilder()
-		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2)
-		.MaxSets(1)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4)   // 2 bindings x 2 sets (PPImage + ColorBuffer)
+		.MaxSets(2)
 		.DebugName("PresentPool")
 		.Create(renderer->Device.get());
 	Present.Set = Present.Pool->allocate(Present.Layout.get());
+	Present.SetColorBuffer = Present.Pool->allocate(Present.Layout.get());
 }
 
 void DescriptorSetManager::CreateBloomLayout()
@@ -145,6 +146,9 @@ void DescriptorSetManager::UpdateFrameDescriptors()
 	WriteDescriptors write;
 	write.AddCombinedImageSampler(Present.Set.get(), 0, textures->Scene->PPImageView[0].get(), samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	write.AddCombinedImageSampler(Present.Set.get(), 1, textures->DitherImageView.get(), samplers->PPNearestRepeat.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	// [KHG perf] Second present set that samples the scene ColorBuffer directly (blit-skip fast path).
+	write.AddCombinedImageSampler(Present.SetColorBuffer.get(), 0, textures->Scene->ColorBufferView.get(), samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	write.AddCombinedImageSampler(Present.SetColorBuffer.get(), 1, textures->DitherImageView.get(), samplers->PPNearestRepeat.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	for (int level = 0; level < NumBloomLevels; level++)
 	{
 		write.AddCombinedImageSampler(GetBloomHTextureSet(level), 0, textures->Scene->BloomBlurLevels[level].HTextureView.get(), samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

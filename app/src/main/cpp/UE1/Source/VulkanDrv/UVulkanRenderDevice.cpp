@@ -1127,6 +1127,29 @@ void UVulkanRenderDevice::BlitSceneToPostprocess()
 	auto buffers = Textures->Scene.get();
 	auto cmdbuffer = Commands->GetDrawCommands();
 
+	// [KHG perf] Fast path: when there is no MSAA resolve to do (SceneSamples==1), no bloom, and no
+	// hit-test readback this frame, the present pass can sample the scene ColorBuffer directly. Skip the
+	// full-frame ColorBuffer->PPImage[0] blit entirely — that blit is a wasted read+write of the whole
+	// framebuffer every frame, especially costly on tile-based (Mali) GPUs. Pixels are identical:
+	// PPImage[0] was only ever a 1:1 VK_FILTER_NEAREST copy of ColorBuffer (same R16G16B16A16_SFLOAT
+	// format). Bloom is off by default, so this is the normal path. Correct-by-construction: the scene
+	// render pass leaves ColorBuffer in COLOR_ATTACHMENT_OPTIMAL; we move it to SHADER_READ_ONLY for the
+	// present sample; the next frame's Lock barrier uses oldLayout=UNDEFINED, so leaving ColorBuffer in
+	// SHADER_READ_ONLY here is safe.
+	PresentFromColorBuffer = ( buffers->SceneSamples == VK_SAMPLE_COUNT_1_BIT && !Bloom && !HitData );
+	if( PresentFromColorBuffer )
+	{
+		PipelineBarrier()
+			.AddImage(
+				buffers->ColorBuffer.get(),
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_ACCESS_SHADER_READ_BIT)
+			.Execute(cmdbuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+		return;
+	}
+
 	PipelineBarrier barrer0;
 	VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	barrer0.AddImage(
@@ -1255,6 +1278,31 @@ void UVulkanRenderDevice::ReadPixels( FColor* Pixels )
 
 	auto cmdbuffer = Commands->GetDrawCommands();
 	DrawBatch( cmdbuffer );
+
+	// [KHG perf] The present fast path (BlitSceneToPostprocess) leaves PPImage[0] unpopulated, so copy the
+	// scene ColorBuffer into PPImage[0] here for the readback. Rare path (SHOT command only). ColorBuffer
+	// is in SHADER_READ_ONLY from the last fast-path present; leave it in TRANSFER_SRC (next Lock uses UNDEFINED).
+	if( PresentFromColorBuffer )
+	{
+		auto buffers = Textures->Scene.get();
+		PipelineBarrier()
+			.AddImage(buffers->ColorBuffer.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT)
+			.AddImage(buffers->PPImage[0].get(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT)
+			.Execute(cmdbuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+		VkImageBlit blit = {};
+		blit.srcOffsets[1] = { buffers->ColorBuffer->width, buffers->ColorBuffer->height, 1 };
+		blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		blit.srcSubresource.layerCount = 1;
+		blit.dstOffsets[1] = { buffers->ColorBuffer->width, buffers->ColorBuffer->height, 1 };
+		blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		blit.dstSubresource.layerCount = 1;
+		cmdbuffer->blitImage(buffers->ColorBuffer->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffers->PPImage[0]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+
+		PipelineBarrier()
+			.AddImage(buffers->PPImage[0].get(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+			.Execute(cmdbuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+	}
 
 	if( GammaCorrectScreenshots )
 	{
@@ -1613,7 +1661,8 @@ void UVulkanRenderDevice::DrawPresentTexture( int width, int height )
 	cmdbuffer->setViewport(0, 1, &viewport);
 	cmdbuffer->setScissor(0, 1, &scissor);
 	cmdbuffer->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, RenderPasses->Present.Pipeline[presentShader].get());
-	cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, RenderPasses->Present.PipelineLayout.get(), 0, DescriptorSets->GetPresentSet());
+	// [KHG perf] Sample ColorBuffer directly when the blit was skipped (see BlitSceneToPostprocess), else PPImage[0].
+	cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, RenderPasses->Present.PipelineLayout.get(), 0, PresentFromColorBuffer ? DescriptorSets->GetPresentSetColorBuffer() : DescriptorSets->GetPresentSet());
 	cmdbuffer->pushConstants(RenderPasses->Present.PipelineLayout.get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PresentPushConstants), &pushconstants);
 	cmdbuffer->draw(6, 1, 0, 0);
 	cmdbuffer->endRenderPass();

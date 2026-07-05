@@ -57,6 +57,9 @@ public:
 
 	VulkanDescriptorSet* GetBindlessSet() { return Textures.BindlessSet.get(); }
 	VulkanDescriptorSet* GetPresentSet() { return Present.Set.get(); }
+	// [KHG perf] Present set that samples the scene ColorBuffer directly (fast path that skips the
+	// ColorBuffer->PPImage blit when there is no MSAA resolve and no bloom). See BlitSceneToPostprocess.
+	VulkanDescriptorSet* GetPresentSetColorBuffer() { return Present.SetColorBuffer.get(); }
 	VulkanDescriptorSet* GetBloomPPImageSet() { return Bloom.PPImageSet.get(); }
 	VulkanDescriptorSet* GetBloomVTextureSet(int level) { return Bloom.VTextureSets[level].get(); }
 	VulkanDescriptorSet* GetBloomHTextureSet(int level) { return Bloom.HTextureSets[level].get(); }
@@ -94,6 +97,7 @@ private:
 		std::unique_ptr<VulkanDescriptorSetLayout> Layout;
 		std::unique_ptr<VulkanDescriptorPool> Pool;
 		std::unique_ptr<VulkanDescriptorSet> Set;
+		std::unique_ptr<VulkanDescriptorSet> SetColorBuffer;   // [KHG perf] samples ColorBuffer directly (blit-skip fast path)
 	} Present;
 
 	struct

@@ -180,6 +180,9 @@ private:
 	FSceneNode* CurrentFrame = nullptr;
 	float Aspect = 0, RProjZ = 0, RFX2 = 0, RFY2 = 0;
 	bool  IsLocked = false;
+	// [KHG perf] Set per-frame by BlitSceneToPostprocess: true when the present pass samples the scene
+	// ColorBuffer directly (the ColorBuffer->PPImage blit was skipped — no MSAA resolve, no bloom).
+	bool  PresentFromColorBuffer = false;
 
 	struct { size_t SceneIndexStart = 0; PipelineState* Pipeline = nullptr; } Batch;
 	ScenePushConstants pushconstants;
