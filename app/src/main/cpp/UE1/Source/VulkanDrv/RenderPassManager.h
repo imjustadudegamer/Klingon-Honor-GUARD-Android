@@ -64,10 +64,17 @@ public:
 		std::unique_ptr<VulkanRenderPass> RenderPassCombine;
 	} Postprocess;
 
+	// [KHG perf] Disk-persisted driver pipeline cache. Feeds every GraphicsPipelineBuilder so the driver
+	// reuses previously compiled pipeline ISA across launches (all pipelines are prewarmed at init/resize).
+	// Safe across devices/driver updates: the driver validates the embedded header and ignores a mismatch.
+	std::unique_ptr<VulkanPipelineCache> PipelineCache;
+
 private:
 	void CreateSceneBindlessPipelineLayout();
 	void CreatePresentPipelineLayout();
 	void CreateBloomPipelineLayout();
+	void CreatePipelineCache();     // [KHG perf] create + load the cache from disk
+	void SavePipelineCache();       // [KHG perf] write the cache to disk after a prewarm pass
 
 	UVulkanRenderDevice* renderer = nullptr;
 };

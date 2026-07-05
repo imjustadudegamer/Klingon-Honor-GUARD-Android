@@ -2,9 +2,11 @@
 #include "Precomp.h"
 #include "RenderPassManager.h"
 #include "UVulkanRenderDevice.h"
+#include <cstdio>   // [KHG perf] pipeline-cache disk I/O (fopen/fread/fwrite/snprintf)
 
 RenderPassManager::RenderPassManager(UVulkanRenderDevice* renderer) : renderer(renderer)
 {
+	CreatePipelineCache();          // [KHG perf] must exist before any pipeline is built
 	CreateSceneBindlessPipelineLayout();
 	CreatePostprocessRenderPass();
 	CreatePresentPipelineLayout();
@@ -15,6 +17,66 @@ RenderPassManager::RenderPassManager(UVulkanRenderDevice* renderer) : renderer(r
 
 RenderPassManager::~RenderPassManager()
 {
+}
+
+// [KHG perf] Path for the persisted pipeline cache: the engine base dir (writable System/ dir where the
+// port keeps Unreal.ini). Not a game asset — a regenerable driver cache.
+static void KHG_PipelineCachePath(char* out, size_t outSize)
+{
+	snprintf(out, outSize, "%sVulkanPipelineCache.bin", appBaseDir());
+}
+
+void RenderPassManager::CreatePipelineCache()
+{
+	// Load any previously saved cache blob. The driver validates its embedded vendor/device/driver header
+	// and silently ignores the data on a mismatch, so a stale or foreign-device blob is harmless.
+	char path[1024];
+	KHG_PipelineCachePath(path, sizeof(path));
+
+	std::vector<uint8_t> initial;
+	if (FILE* f = fopen(path, "rb"))
+	{
+		fseek(f, 0, SEEK_END);
+		long size = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		if (size > 0 && size < 64 * 1024 * 1024)
+		{
+			initial.resize((size_t)size);
+			if (fread(initial.data(), 1, (size_t)size, f) != (size_t)size)
+				initial.clear();
+		}
+		fclose(f);
+	}
+
+	PipelineCacheBuilder builder;
+	builder.DebugName("KHGPipelineCache");
+	if (!initial.empty())
+		builder.InitialData(initial.data(), initial.size());
+	PipelineCache = builder.Create(renderer->Device.get());
+
+	debugf(NAME_Log, "VulkanDrv: pipeline cache %s (%u bytes)", initial.empty() ? "cold" : "loaded", (unsigned)initial.size());
+}
+
+void RenderPassManager::SavePipelineCache()
+{
+	// Persist the current cache blob. Called at the end of each full pipeline-creation pass (init/resize),
+	// never per frame, so the on-disk cache always reflects the complete prewarmed set regardless of the
+	// order in which scene vs present pipelines were built.
+	if (!PipelineCache)
+		return;
+
+	std::vector<uint8_t> data = PipelineCache->GetCacheData();
+	if (data.empty())
+		return;
+
+	char path[1024];
+	KHG_PipelineCachePath(path, sizeof(path));
+	if (FILE* f = fopen(path, "wb"))
+	{
+		fwrite(data.data(), 1, data.size(), f);
+		fclose(f);
+		debugf(NAME_Log, "VulkanDrv: saved pipeline cache (%u bytes)", (unsigned)data.size());
+	}
 }
 
 void RenderPassManager::CreateSceneBindlessPipelineLayout()
@@ -96,6 +158,7 @@ void RenderPassManager::CreatePipelines()
 	for (int i = 0; i < 32; i++)
 	{
 		GraphicsPipelineBuilder builder;
+		builder.Cache(PipelineCache.get());   // [KHG perf] driver pipeline cache
 		builder.AddVertexShader(vertShader);
 		builder.Viewport(0.0f, 0.0f, (float)renderer->Textures->Scene->Width, (float)renderer->Textures->Scene->Height);
 		builder.Scissor(0, 0, renderer->Textures->Scene->Width, renderer->Textures->Scene->Height);
@@ -170,6 +233,7 @@ void RenderPassManager::CreatePipelines()
 	for (int i = 0; i < 2; i++)
 	{
 		GraphicsPipelineBuilder builder;
+		builder.Cache(PipelineCache.get());   // [KHG perf] driver pipeline cache
 		builder.AddVertexShader(vertShader);
 		builder.Viewport(0.0f, 0.0f, (float)renderer->Textures->Scene->Width, (float)renderer->Textures->Scene->Height);
 		builder.Scissor(0, 0, renderer->Textures->Scene->Width, renderer->Textures->Scene->Height);
@@ -210,6 +274,7 @@ void RenderPassManager::CreatePipelines()
 	for (int i = 0; i < 2; i++)
 	{
 		GraphicsPipelineBuilder builder;
+		builder.Cache(PipelineCache.get());   // [KHG perf] driver pipeline cache
 		builder.AddVertexShader(vertShader);
 		builder.AddFragmentShader(fragShader);
 		builder.Viewport(0.0f, 0.0f, (float)renderer->Textures->Scene->Width, (float)renderer->Textures->Scene->Height);
@@ -245,6 +310,8 @@ void RenderPassManager::CreatePipelines()
 			Scene.PointPipeline[i].MaxDepth = 0.1f;
 		}
 	}
+
+	SavePipelineCache();   // [KHG perf] scene/line/point prewarmed — persist
 }
 
 void RenderPassManager::CreateRenderPass()
@@ -333,6 +400,7 @@ void RenderPassManager::CreatePresentPipeline()
 	for (int i = 0; i < 16; i++)
 	{
 		Present.Pipeline[i] = GraphicsPipelineBuilder()
+			.Cache(PipelineCache.get())
 			.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 			.AddFragmentShader(renderer->Shaders->Postprocess.FragmentPresentShader[i].get())
 			.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -342,6 +410,8 @@ void RenderPassManager::CreatePresentPipeline()
 			.DebugName("PresentPipeline")
 			.Create(renderer->Device.get());
 	}
+
+	SavePipelineCache();   // [KHG perf] present pipelines prewarmed — persist the complete cache
 }
 
 void RenderPassManager::CreateScreenshotPipeline()
@@ -349,6 +419,7 @@ void RenderPassManager::CreateScreenshotPipeline()
 	for (int i = 0; i < 16; i++)
 	{
 		Present.ScreenshotPipeline[i] = GraphicsPipelineBuilder()
+			.Cache(PipelineCache.get())
 			.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 			.AddFragmentShader(renderer->Shaders->Postprocess.FragmentPresentShader[i].get())
 			.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -392,6 +463,7 @@ void RenderPassManager::CreatePostprocessRenderPass()
 void RenderPassManager::CreateBloomPipeline()
 {
 	Bloom.Extract = GraphicsPipelineBuilder()
+		.Cache(PipelineCache.get())
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 		.AddFragmentShader(renderer->Shaders->Bloom.Extract.get())
 		.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -402,6 +474,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Create(renderer->Device.get());
 
 	Bloom.Combine = GraphicsPipelineBuilder()
+		.Cache(PipelineCache.get())
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 		.AddFragmentShader(renderer->Shaders->Bloom.Combine.get())
 		.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -413,6 +486,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Create(renderer->Device.get());
 
 	Bloom.Scale = GraphicsPipelineBuilder()
+		.Cache(PipelineCache.get())
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 		.AddFragmentShader(renderer->Shaders->Bloom.Combine.get())
 		.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -423,6 +497,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Create(renderer->Device.get());
 
 	Bloom.BlurVertical = GraphicsPipelineBuilder()
+		.Cache(PipelineCache.get())
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 		.AddFragmentShader(renderer->Shaders->Bloom.BlurVertical.get())
 		.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
@@ -433,6 +508,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Create(renderer->Device.get());
 
 	Bloom.BlurHorizontal = GraphicsPipelineBuilder()
+		.Cache(PipelineCache.get())
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader.get())
 		.AddFragmentShader(renderer->Shaders->Bloom.BlurHorizontal.get())
 		.AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT)
