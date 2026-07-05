@@ -288,7 +288,7 @@ inline UObject* FFrame::ReadObject()
 	// stock 32-bit .u packages stay valid. Resolve the index back to a pointer.
 	INT Index = *(INT*)Code;
 	Code += sizeof(INT);
-	return (Index==INDEX_NONE) ? NULL : GObj.GetIndexedObject(Index);
+	return (Index==INDEX_NONE) ? NULL : GObj.GetIndexedObjectFast(Index);   // [KHG arm64 perf] inlined resolve on the VM hot path
 #else
 	// On 32-bit, references are raw pointers (sizeof == 4, same width as the
 	// on-disk-implied slot), read them directly.

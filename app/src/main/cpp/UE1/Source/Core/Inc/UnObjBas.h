@@ -451,6 +451,14 @@ public:
 	virtual UObject* ImportObjectFromFile( UClass* Class, UObject* InParent, FName Name, const char* Filename, FFeedbackContext* Warn=GSystem );
 	virtual void ShutdownAfterError();
 	virtual UObject* GetIndexedObject( INT Index );
+	// [KHG arm64 perf] Inlined fast path for the UnrealScript VM. On 64-bit every script object reference
+	// resolves through the object table each execution (FFrame::ReadObject); a non-virtual inline avoids a
+	// per-reference out-of-line function call. Semantically identical to GetIndexedObject (the
+	// (DWORD)Index<(DWORD)Num() form also rejects negatives). Objects is a static member.
+	inline UObject* GetIndexedObjectFast( INT Index )
+	{
+		return ( (DWORD)Index < (DWORD)Objects.Num() ) ? Objects(Index) : NULL;
+	}
 	virtual void GlobalSetProperty( const char* Value, UClass* Class, UProperty* Property, INT Offset, UBOOL Immediate );
 	virtual void ExportProperties( UClass* ObjectClass, BYTE* Object, FOutputDevice* Out, INT Indent, UClass* DiffClass, BYTE* Diff );
 	virtual void ResetConfig( UClass* Class, const char* SrcFilename=NULL, const char* DestFilename=NULL );
