@@ -320,6 +320,31 @@ final class UnrealDataPaths {
         patchNsdlControllerDefaults(new File(systemDir, "Unreal.ini"));
         patchNsdlControllerDefaults(new File(systemDir, "Default.ini"));
         appendControllerInputFallbacks(new File(systemDir, "User.ini"));
+        repairRenderModule(new File(systemDir, "Unreal.ini"));
+        repairRenderModule(new File(systemDir, "Default.ini"));
+    }
+
+    // UNREAL_ANDROID_RENDER_MODULE_FIX_V143: the [Engine.Engine] Render key is the software render
+    // MODULE (a URenderBase subclass — must be Render.Render), NOT the render DEVICE. A shipped config
+    // wrongly set Render=VulkanDrv.VulkanRenderDevice; at startup UGameEngine::Init does
+    // LoadClass(URenderBase, "ini:Engine.Engine.Render") and rejects it — crashing fresh installs with
+    // "LoadClassMismatch: VulkanRenderDevice is not a child of RenderBase". (The render DEVICE is set
+    // separately via GameRenderDevice/WindowedRenderDevice, which stay VulkanDrv.VulkanRenderDevice.)
+    // The render module is fixed on this port and never user-tunable, so force-correct it on EVERY launch
+    // — this also repairs devices that already copied the broken config, since copyAssetIfMissing never
+    // overwrites an existing /sdcard Unreal.ini.
+    private static void repairRenderModule(File file) {
+        if (file == null || !file.isFile()) return;
+        try {
+            String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String patched = setIniValue(text, "Engine.Engine", "Render", "Render.Render");
+            if (!patched.equals(text)) {
+                Files.write(file.toPath(), patched.getBytes(StandardCharsets.UTF_8));
+                Log.i(TAG_CONFIG, "Repaired [Engine.Engine] Render module to Render.Render: " + file.getAbsolutePath());
+            }
+        } catch (IOException ex) {
+            Log.w(TAG_CONFIG, "Could not repair render module in " + file.getAbsolutePath() + ": " + ex);
+        }
     }
 
     private static void patchNsdlControllerDefaults(File file) {
