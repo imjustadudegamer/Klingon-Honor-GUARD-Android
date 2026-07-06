@@ -18,7 +18,8 @@ CD + patches, or an existing PC install) and you supply its data files yourself.
 
 - **Vulkan renderer** — a from-scratch `VulkanDrv` render device draws the 3D BSP world with
   baked lightmaps, Gouraud-shaded characters/meshes, translucency, and the 2D HUD/menu at ~60 fps.
-  This is the only renderer; there is no OpenGL ES path.
+  This is the only renderer; there is no OpenGL ES path. Runs across common mobile Vulkan drivers,
+  including Mali (with driver-specific renderer workarounds) and Adreno.
 - **On-device FMV** — the intro movie, the MicroProse splash, mission briefings, and the
   decorated Klingon comm-frame cutscenes all decode and play through a bundled LGPL FFmpeg build.
 - **Save / load** — saving and loading game state works through the engine's hub/save system.
