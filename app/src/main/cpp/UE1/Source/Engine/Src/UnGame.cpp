@@ -98,7 +98,19 @@ void UGameEngine::Init()
 		Client->Init( this );
 
 		// Init rendering.
-		UClass* RenderClass = GObj.LoadClass( URenderBase::StaticClass, NULL, "ini:Engine.Engine.Render", NULL, LOAD_NoFail | LOAD_KeepImports, NULL );
+		// UNREAL_ANDROID_RENDER_MODULE_GUARD_V150: the [Engine.Engine] Render key is the software render
+		// MODULE (a URenderBase subclass — must be Render.Render), NOT the render DEVICE. A legacy/stale
+		// on-device Unreal.ini that set Render=VulkanDrv.VulkanRenderDevice makes this LoadClass throw
+		// "LoadClassMismatch: VulkanRenderDevice is not a child of RenderBase"; with LOAD_NoFail that is
+		// fatal and bricks startup (reported on fresh/updated Mali installs whose config escaped the Java
+		// launch-repair). Load non-fatally, validate, and fall back to the stock software render module so
+		// a wrong config can NEVER crash the engine regardless of which config root the launcher patched.
+		UClass* RenderClass = GObj.LoadClass( URenderBase::StaticClass, NULL, "ini:Engine.Engine.Render", NULL, LOAD_KeepImports | LOAD_NoWarn, NULL );
+		if( !RenderClass || !RenderClass->IsChildOf(URenderBase::StaticClass) )
+		{
+			debugf( NAME_Init, "Engine.Engine.Render is missing or not a RenderBase subclass; forcing Render.Render" );
+			RenderClass = GObj.LoadClass( URenderBase::StaticClass, NULL, "Render.Render", NULL, LOAD_NoFail | LOAD_KeepImports, NULL );
+		}
 		Render = ConstructClassObject<URenderBase>( RenderClass );
 		Render->Init( this );
 	}
