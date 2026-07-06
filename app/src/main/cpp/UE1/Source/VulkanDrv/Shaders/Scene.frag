@@ -18,6 +18,7 @@ layout(location = 4) in vec2 texCoord4;
 layout(location = 5) in vec4 color;
 layout(location = 6) flat in uint hitIndex;
 layout(location = 7) flat in ivec4 textureBinds;
+layout(location = 8) in float clipNear; // [KHG] near-plane clip (Mali-safe: fragment discard instead of gl_ClipDistance)
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outHitIndex;
@@ -30,6 +31,9 @@ vec4 darkClamp(vec4 c)
     return vec4(clamp((c.rgb - cutoff) / (1.0 - cutoff), 0.0, 1.0), c.a);
 }
 
+// nonuniformEXT is REQUIRED for correctness: a subgroup can span primitives with different textureBinds,
+// so the descriptor index is non-uniform across lanes. Without it, edge lanes sample the wrong texture
+// (visible as speckling along polygon edges). This is NOT what crashed Mali (that was gl_ClipDistance).
 vec4 textureTex(vec2 uv) { return texture(textures[nonuniformEXT(textureBinds.x)], uv); }
 vec4 textureMacro(vec2 uv) { return texture(textures[nonuniformEXT(textureBinds.y)], uv); }
 vec4 textureDetail(vec2 uv) { return texture(textures[nonuniformEXT(textureBinds.z)], uv); }
@@ -37,6 +41,8 @@ vec4 textureLightmap(vec2 uv) { return texture(textures[nonuniformEXT(textureBin
 
 void main()
 {
+    if (clipNear < 0.0) discard; // [KHG] near-plane clip (replaces gl_ClipDistance, which crashes Mali's SPIR-V compiler)
+
     float actorXBlending = (flags & 32) != 0 ? 1.5 : 1.0;
     float oneXBlending = (flags & 64) != 0 ? 1.0 : 2.0;
 

@@ -353,8 +353,25 @@ static UBOOL UE1AndroidTouchButtonDirectHandleV136( UNSDLViewport* Viewport, INT
 	// here avoids fragile Android KeyEvent/gamepad binding paths and mirrors the
 	// existing direct trigger bridge: use the friendly controller binding when it
 	// exists, otherwise fall back to the classic PC key/mouse binding.
-	if( KeyCode != 910105 && KeyCode != 910104 && KeyCode != 910096 && KeyCode != 910097 && KeyCode != 910103 )
+	if( KeyCode != 910105 && KeyCode != 910104 && KeyCode != 910096 && KeyCode != 910097 && KeyCode != 910103 && KeyCode != 910200 )
 		return 0;
+
+	// UNREAL_ANDROID_TOUCH_MENU_DIRECT_V144: the on-screen MENU button injects a real Escape key press.
+	// This must work in EVERY state (title, gameplay, and inside the menu to close it), so it is handled
+	// BEFORE the in-UI swallow below. Set the Escape binding just-in-time (the config [Engine.Input] set is
+	// not reliably loaded into Input->Bindings here, which is why the gameplay buttons also bind on the fly)
+	// so a not-menuing Escape runs ShowMenu, while a menuing Escape is consumed by the menu itself.
+	if( KeyCode == 910200 )
+	{
+		if( bPressed && Viewport && Viewport->Input )
+		{
+			Viewport->Input->Bindings[IK_Escape] = "ShowMenu";
+			Viewport->CauseInputEvent( IK_Escape, IST_Press );
+			Viewport->CauseInputEvent( IK_Escape, IST_Release );
+		}
+		__android_log_print( ANDROID_LOG_INFO, "UE1Controller", "UNREAL_ANDROID_TOUCH_MENU_DIRECT_V144 menu %s", bPressed ? "down" : "up" );
+		return 1;
+	}
 
 	if( ( bIsInUI || bIsKeyMenuing ) && bPressed )
 		return 1;
@@ -3971,7 +3988,7 @@ UBOOL UNSDLViewport::Exec( const char* Cmd, FOutputDevice* Out )
 	UE1AndroidCleanScrubFriendlyAliasDuplicatesV92( Input );
 	UE1AndroidCleanPatchKeyboardMenuNextWeaponV86( this );
 
-	// [KHG] PlayAVI: implements for KHG's ConsoleCommand("playavi <f1> <flag1> ... <f5> <flag5>"); parse up to 5 file/flag pairs ("None"=empty) and play each System-dir clip via the FFmpeg FMV player (blocking, game loop paused then resumed). Y/C flags drive the decorated console frame (a separate buildup.avi/breakdn.avi the content composites into): Y => buildup->content->breakdn, C => content composited onto the current frame (continuation), N/T/None => plain full-screen.
+	// [KHG] PlayAVI: replaces the original Window.dll VFW handler for KHG's ConsoleCommand("playavi <f1> <flag1> ... <f5> <flag5>"); parse up to 5 file/flag pairs ("None"=empty) and play each System-dir clip via the FFmpeg FMV player (blocking, game loop paused then resumed). Y/C flags drive the decorated console frame (a separate buildup.avi/breakdn.avi the content composites into): Y => buildup->content->breakdn, C => content composited onto the current frame (continuation), N/T/None => plain full-screen. See FMV_COMM_FRAME_RE.md.
 	{
 		const char* AviCmd = Cmd;
 		if( ParseCommand( &AviCmd, "PlayAVI" ) )

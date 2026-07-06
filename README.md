@@ -1,8 +1,9 @@
 # Klingon Honor Guard — Android
 
 A native Android port of *Star Trek: Klingon Honor Guard* (1998), the **Unreal Engine 1**
-first-person shooter. It boots to the menu and plays through real missions on-device, with a
-from-scratch Vulkan renderer, on-device FMV cutscenes, and full gamepad support.
+first-person shooter. It boots to the menu and plays real missions end-to-end on-device, with a
+from-scratch Vulkan renderer, on-device FMV cutscenes, and both on-screen touch controls and full
+gamepad support. Runs on 32-bit and 64-bit ARM.
 
 The engine base is [fgsfdsfgs/UE1](https://github.com/fgsfdsfgs/UE1) (a UE1 v200 source port)
 on the [Andiweli/Unreal-Android](https://github.com/fgsfdsfgs/UE1) Android bring-up, surgically
@@ -33,12 +34,13 @@ CD + patches, or an existing PC install) and you supply its data files yourself.
 
 ## Requirements
 
-- Android 6.0+ (API 23) on an **armeabi-v7a** (32-bit ARM) device with Vulkan support. The
-  current build targets 32-bit ARM only; the arm64 variant is not enabled.
+- Android 6.0+ (API 23) with Vulkan support, on **32-bit (armeabi-v7a) or 64-bit (arm64-v8a)**
+  ARM. The APK carries both builds and installs the right one automatically; saves work on either.
 - A retail copy of *Star Trek: Klingon Honor Guard*. You need its `System`, `Maps`, `Textures`,
   `Sounds`, and `Music` directories, plus the `.avi` movie files from `System/`.
-- **A gamepad.** On-screen touch controls are not implemented yet, so a physical controller is
-  currently required for gameplay (touch is used only to skip cutscenes).
+- **Controls:** on-screen touch controls are enabled by default (move stick, look, fire / alt /
+  jump / crouch / switch, a MENU button, and Back → menu). A physical gamepad is fully supported
+  and rebindable in-game, but not required.
 
 ### 1. Get the APK
 
@@ -56,10 +58,11 @@ developer mode on:
 adb install app-release.apk
 ```
 
-### 3. Connect a gamepad
+### 3. Controls (touch or gamepad)
 
-A physical controller is **required** — there are no on-screen touch controls yet. Pair a
-Bluetooth/USB gamepad before launching.
+On-screen touch controls are on by default, so you can play with no accessory at all. Prefer a
+physical controller? Pair a Bluetooth/USB gamepad before launching — it's fully supported and
+rebindable in the in-game settings. The game runs locked to landscape.
 
 ### 4. Provide your game data (first launch)
 
@@ -77,7 +80,7 @@ Exact `adb push` commands for manual staging are in **[docs/BUILD.md](docs/BUILD
 
 ## Known issues
 
-This is a work in progress and is still being play-tested. Known issues:
+The port is now stable and plays end-to-end. A few rough edges remain:
 
 - **Some effects and fine FMV compositing details** are still being refined.
 - **Long-session engine stability** — the original UE1 game logic has latent actor-lifecycle

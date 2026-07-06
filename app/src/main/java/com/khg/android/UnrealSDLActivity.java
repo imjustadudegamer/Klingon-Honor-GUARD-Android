@@ -152,29 +152,59 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
         super.onDestroy();
     }
 
+    // UNREAL_ANDROID_SUSPEND_RESUME_HARDEN_V149: a helper throwing must never tear down the Activity
+    // mid-suspend/resume. Each step runs isolated; super.on{Pause,Resume}() (which drives SDL's
+    // background/foreground transition and surface teardown/recreation) always runs.
     @Override
     protected void onPause() {
-        resetAndroidNativeControllerState(); // ANDROID_CONTROLLER_NATIVE_RESET_V88
+        safe(this::resetAndroidNativeControllerState); // ANDROID_CONTROLLER_NATIVE_RESET_V88
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        resetAndroidNativeControllerState(); // ANDROID_CONTROLLER_NATIVE_RESET_V88
-        hideSystemUi();
-        scheduleImmersiveRefresh();
-        installUnrealTouchOverlayV124(); // UNREAL_ANDROID_TOUCH_OVERLAY_V125
+        forceLandscapeV149(); // re-lock: SDL video init may have changed the requested orientation
+        safe(this::resetAndroidNativeControllerState); // ANDROID_CONTROLLER_NATIVE_RESET_V88
+        safe(this::hideSystemUi);
+        safe(this::scheduleImmersiveRefresh);
+        safe(this::installUnrealTouchOverlayV124); // UNREAL_ANDROID_TOUCH_OVERLAY_V125
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
-            resetAndroidNativeControllerState(); // ANDROID_CONTROLLER_NATIVE_RESET_V88
-            hideSystemUi();
-            scheduleImmersiveRefresh();
-            bringTouchOverlayToFrontV125(); // UNREAL_ANDROID_TOUCH_OVERLAY_V125
+            forceLandscapeV149(); // re-lock after returning to foreground
+            safe(this::resetAndroidNativeControllerState); // ANDROID_CONTROLLER_NATIVE_RESET_V88
+            safe(this::hideSystemUi);
+            safe(this::scheduleImmersiveRefresh);
+            safe(this::bringTouchOverlayToFrontV125); // UNREAL_ANDROID_TOUCH_OVERLAY_V125
+        }
+    }
+
+    // UNREAL_ANDROID_FORCE_LANDSCAPE_V149: SDL's video init calls SDLActivity.setOrientation()/
+    // setOrientationBis(), which recomputes the requested orientation from the window size /
+    // SDL_HINT_ORIENTATIONS and OVERRIDES both the manifest and our onCreate lock — that is why the game
+    // would not stay in landscape. Override the hook and force strict landscape unconditionally (no
+    // portrait, no 180 flip). Also re-asserted on resume/focus in case anything else changes it.
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        forceLandscapeV149();
+    }
+
+    private void forceLandscapeV149() {
+        try {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // Run a lifecycle helper without letting it crash the suspend/resume transition.
+    private static void safe(Runnable r) {
+        try {
+            r.run();
+        } catch (Throwable ignored) {
         }
     }
 
@@ -182,9 +212,14 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
     // menu (Escape) instead of finishing the Activity. KEYCODE_MENU maps to IK_Escape
     // natively, which opens the menu in gameplay and backs out one level inside menus.
     private void sendNativeMenuToggleV142() {
+        // UNREAL_ANDROID_BACK_MENU_DIRECT_V149: route Back through the SAME reliable direct-touch path as the
+        // on-screen MENU button (DIRECT_MENU=910200 -> native sets Bindings[IK_Escape]=ShowMenu +
+        // CauseInputEvent). The old KEYCODE_MENU controller path needed config bindings loaded and a
+        // registered controller device, so Back could silently do nothing. This opens the menu in gameplay
+        // and backs out one level inside menus, in every state.
         try {
-            nativeAndroidControllerKey(-142, 0, 0, KeyEvent.KEYCODE_MENU, 0, KeyEvent.ACTION_DOWN, 0, InputDevice.SOURCE_GAMEPAD, "UnrealBackMenuV142");
-            nativeAndroidControllerKey(-142, 0, 0, KeyEvent.KEYCODE_MENU, 0, KeyEvent.ACTION_UP, 0, InputDevice.SOURCE_GAMEPAD, "UnrealBackMenuV142");
+            nativeAndroidControllerKey(-136, 0, 0, 910200, 0, KeyEvent.ACTION_DOWN, 0, InputDevice.SOURCE_GAMEPAD, "UnrealBackMenuDirectV149");
+            nativeAndroidControllerKey(-136, 0, 0, 910200, 0, KeyEvent.ACTION_UP, 0, InputDevice.SOURCE_GAMEPAD, "UnrealBackMenuDirectV149");
         } catch (Throwable ignored) {
         }
     }
@@ -503,10 +538,12 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
         File systemDir = unrealSystemDirV124();
         Boolean found = null;
         if (systemDir != null) {
+            // UNREAL_ANDROID_SINGLE_INI_V148: Unreal.ini is the authoritative source (the in-game options
+            // toggle SaveConfig-writes bTouchControls there). Read it LAST so it wins. User.ini/AndroidUI.ini
+            // are legacy fallbacks for older installs that seeded the flag elsewhere; Default.ini is gone.
             found = readTouchControlsFlagV124(new File(systemDir, "User.ini"), found);
-            found = readTouchControlsFlagV124(new File(systemDir, "Unreal.ini"), found);
             found = readTouchControlsFlagV124(new File(systemDir, "AndroidUI.ini"), found);
-            found = readTouchControlsFlagV124(new File(systemDir, "Default.ini"), found);
+            found = readTouchControlsFlagV124(new File(systemDir, "Unreal.ini"), found);
         }
         return found != null ? found.booleanValue() : true;
     }
@@ -597,9 +634,15 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
 
         // Native direct gameplay keycodes (handled in NSDLViewport UE1AndroidTouchButtonDirectHandleV136).
         private static final int DIRECT_FIRE = 910105, DIRECT_ALT = 910104, DIRECT_JUMP = 910096, DIRECT_CROUCH = 910097, DIRECT_NEXT = 910103;
+        private static final int DIRECT_MENU = 910200; // UNREAL_ANDROID_TOUCH_MENU_DIRECT_V144 -> native injects Escape (ShowMenu)
 
         // Per-pointer role encoding stored in `roles`.
-        private static final int ROLE_STICK = 1, ROLE_LOOK = 2, ROLE_ACTION = 100;
+        private static final int ROLE_STICK = 1, ROLE_LOOK = 2, ROLE_MENU = 3, ROLE_ACTION = 100;
+
+        // Standalone MENU (Escape) button, top-left. Always visible so the menu is reachable even where
+        // the hardware Back key is unreliable. A tap sends KEYCODE_MENU, which the native input path
+        // maps to IK_Escape (opens/closes the UE1 menu, and confirms "PRESS ESC TO BEGIN").
+        private static final float MENU_CX = 0.055f, MENU_CY = 0.060f, MENU_HW = 0.050f, MENU_HH = 0.032f;
 
         // --- action pills (index order is fixed; used for the state arrays) ---
         private static final int A_FIRE = 0, A_ALT = 1, A_SWITCH = 2, A_JUMP = 3, A_CROUCH = 4, A_COUNT = 5;
@@ -692,9 +735,10 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
             float w = getWidth(), h = getHeight();
             if (w <= 0 || h <= 0) return;
 
-            if (!menuVisible) {
-                // In-game: auto-hide ~4s after the last touch (Voyager behaviour) unless a
-                // finger is down. A fresh tap re-shows and acts immediately.
+            // Auto-hide ~4s after the last touch in BOTH gameplay and menus (was gameplay-only, which left
+            // the controls stuck on top of the in-game menu). A finger down keeps them up; a fresh tap
+            // re-shows and acts immediately (the MENU button is hit-tested even while hidden).
+            {
                 long now = android.os.SystemClock.uptimeMillis();
                 if (lastTouchMs == 0) lastTouchMs = now;
                 boolean held = moveFinger != -1 || lookFinger != -1 || anyActionFinger();
@@ -720,6 +764,9 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
                 drawPill(canvas, w, h, aCx[i], aCy[i], aHw[i], aHh[i],
                         aPressed[i] ? LCARS_HOPBUSH : aCol[i], aLbl[i], alpha);
             }
+
+            // MENU (Escape) button, top-left; auto-hides with the rest of the controls.
+            drawPill(canvas, w, h, MENU_CX, MENU_CY, MENU_HW, MENU_HH, LCARS_ICE, "MENU", alpha);
         }
 
         private void drawPill(android.graphics.Canvas canvas, float w, float h,
@@ -767,6 +814,17 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
                 releaseAll();
                 roles.clear();
                 return false; // controls off: do not intercept; let SDL handle the screen
+            }
+            // The MENU (Escape) button must work in EVERY state, including the intro/title cutscene where
+            // the block below hands touches to SDL. Test it first so ESC always reaches the game.
+            int menuAction = event.getActionMasked();
+            if (menuAction == MotionEvent.ACTION_DOWN || menuAction == MotionEvent.ACTION_POINTER_DOWN) {
+                int mi = event.getActionIndex();
+                if (hitPill(event.getX(mi), event.getY(mi), getWidth(), getHeight(), MENU_CX, MENU_CY, MENU_HW, MENU_HH)) {
+                    lastTouchMs = android.os.SystemClock.uptimeMillis();
+                    sendMenuEscTap();
+                    return true;
+                }
             }
             // FMV/cutscene: release the touch so SDL sees SDL_FINGERDOWN and PollSkip skips it.
             try {
@@ -816,6 +874,10 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
             int role = resolveDown(x, y);
             if (role == 0) return false; // empty area: pass through to SDL
             lastTouchMs = android.os.SystemClock.uptimeMillis();
+            if (role == ROLE_MENU) {
+                sendMenuEscTap(); // discrete ESC tap; not finger-tracked
+                return true;
+            }
             if (role >= ROLE_ACTION) {
                 int i = role - ROLE_ACTION;
                 if (applyActionDown(i, pid, x, y)) roles.put(pid, Integer.valueOf(role));
@@ -839,6 +901,7 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
 
         private int resolveDown(float x, float y) {
             float w = getWidth(), h = getHeight();
+            if (hitPill(x, y, w, h, MENU_CX, MENU_CY, MENU_HW, MENU_HH)) return ROLE_MENU;
             for (int i = 0; i < A_COUNT; ++i) {
                 if (hitPill(x, y, w, h, aCx[i], aCy[i], aHw[i], aHh[i])) return ROLE_ACTION + i;
             }
@@ -925,6 +988,18 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
                    : dir == 3 ? KeyEvent.KEYCODE_DPAD_LEFT
                    : KeyEvent.KEYCODE_DPAD_RIGHT;
             setButton(kc, true); // native UI path turns a DOWN into a discrete menu tap
+        }
+
+        // On-screen MENU button: route through the reliable native direct-touch path (same mechanism as
+        // FIRE/JUMP), which injects a real Escape key press (Bindings[IK_Escape]=ShowMenu + CauseInputEvent).
+        // This works in every state, unlike the Android KeyEvent/controller path which needs config bindings
+        // loaded and a registered controller device.
+        private void sendMenuEscTap() {
+            try {
+                setDirectTouchButtonV136(DIRECT_MENU, true);
+                setDirectTouchButtonV136(DIRECT_MENU, false);
+            } catch (Throwable ignored) {
+            }
         }
 
         private void pushLook(float dxPx, float dyPx) {

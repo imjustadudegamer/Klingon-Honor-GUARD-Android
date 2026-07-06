@@ -2290,7 +2290,21 @@ UBOOL appFindPackageFile( const char* In, const FGuid* Guid, char* Out )
 			Ext = appStrstr(Temp,"*");
 			if( Ext )
 				*Ext++ = 0;
+#if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
+			// [KHG] Resolve package search paths against the absolute base directory.
+			// On Android the game data lives in app-specific external storage served
+			// through a per-app FUSE mount, where relative-path resolution via the
+			// process CWD is not reliable for native file access (the launcher does
+			// chdir() to System, but only absolute paths resolve on this mount).
+			// Config/DLL loading already uses appBaseDir()-based absolute paths; this
+			// brings package (.u/.unr/.utx/...) resolution in line so LoadMap works.
+			Out[0] = 0;
+			if( Temp[0]!='/' )
+				appStrcpy( Out, appBaseDir() );
+			appStrcat( Out, Temp );
+#else
 			strcpy( Out, Temp );
+#endif
 			strcat( Out, In );
 		}
 		else
@@ -2298,8 +2312,16 @@ UBOOL appFindPackageFile( const char* In, const FGuid* Guid, char* Out )
 			strcpy( Temp, PATH(GSys->CachePath) );
 			strcat( Temp, PATH_SEPARATOR );
 			Ext = GSys->CacheExt;
+#if defined(PLATFORM_ANDROID) || defined(UNREAL_ANDROID) || defined(__ANDROID__)
+			Out[0] = 0;
+			if( Temp[0]!='/' )
+				appStrcpy( Out, appBaseDir() );
+			appStrcat( Out, Temp );
+			appStrcat( Out, Guid->String(Temp) );
+#else
 			strcpy( Out, Temp );
 			strcat( Out, Guid->String(Temp) );
+#endif
 		}
 
 		// Check for file.

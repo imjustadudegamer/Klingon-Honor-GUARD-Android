@@ -2,7 +2,7 @@
 	FMVPlayer.h: Klingon Honor Guard FMV (Indeo 5 / IV50 AVI) playback for Android.
 
 	KHG triggers cutscenes from UnrealScript via `ConsoleCommand("playavi <file> ...")`,
-	originally handled by Windows VFW/DirectShow in the desktop build. We decode the user's own
+	originally handled by Windows VFW/DirectShow in Window.dll. We decode the user's own
 	AVI on-device with FFmpeg (LGPL): Indeo 5 video + MS-ADPCM audio.
 
 	To preserve KHG's presentation, the video is composited UNDER the live engine HUD

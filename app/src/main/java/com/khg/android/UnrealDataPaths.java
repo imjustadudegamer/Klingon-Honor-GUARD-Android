@@ -243,9 +243,13 @@ final class UnrealDataPaths {
         if (root == null) return;
         File systemDir = new File(root, "System");
         if (!systemDir.exists() && !systemDir.mkdirs()) Log.w(TAG_CONFIG, "Could not create System directory: " + systemDir.getAbsolutePath());
+        // UNREAL_ANDROID_SINGLE_INI_V148: Unreal.ini is the ONE engine config file (it is the DefaultIni the
+        // engine loads AND saves — UnConfig.cpp/UnPlat.cpp). Default.ini used to be shipped and patched in
+        // parallel, but it is only a first-run copy SEED (UnPlat.cpp copies it to Unreal.ini only when
+        // Unreal.ini is missing) and is never read at runtime, so it was pure dual-maintenance. We no longer
+        // ship or touch it; everything is unified into Unreal.ini.
         copyAssetIfMissing(context, "ue1_config/Unreal.ini", new File(systemDir, "Unreal.ini"));
         copyAssetIfMissing(context, "ue1_config/User.ini", new File(systemDir, "User.ini"));
-        copyAssetIfMissing(context, "ue1_config/Default.ini", new File(systemDir, "Default.ini"));
         copyAssetIfMissing(context, "ue1_config/AndroidController.ini", new File(systemDir, "AndroidController.ini"));
         copyAssetIfMissing(context, "ue1_config/AndroidUI.ini", new File(systemDir, "AndroidUI.ini"));
     }
@@ -268,7 +272,6 @@ final class UnrealDataPaths {
         File systemDir = new File(root, "System");
         if (findCaseInsensitive(systemDir, "Klingons.u") == null) return;
         patchPackageName(new File(root, "System/Unreal.ini"));
-        patchPackageName(new File(root, "System/Default.ini"));
     }
 
     private static void patchPackageName(File file) {
@@ -299,9 +302,12 @@ final class UnrealDataPaths {
             ensureDirectoryLayout(root);
             installDefaultConfigsIfNeeded(context, root);
             File systemDir = new File(root, "System");
+            // UNREAL_ANDROID_SINGLE_INI_V148: User.ini is an inert stub — all config lives in Unreal.ini.
+            // If it is somehow missing, seed an empty, comment-only file (no [Engine.Input]/[DefaultPlayer],
+            // which would be dead weight and a drift trap).
             ensureConfigFile(systemDir, "User.ini", new String[] { "DefUser.ini", "DefaultUser.ini" },
-                    "[DefaultPlayer]\nName=Player\nClass=UnrealShare.MaleOne\n\n[Engine.Input]\n");
-            ensureConfigFile(systemDir, "Unreal.ini", new String[] { "Default.ini", "Unreal.ini.default" }, "");
+                    "; Inert stub — all config lives in Unreal.ini (see the shipped User.ini header).\n");
+            ensureConfigFile(systemDir, "Unreal.ini", new String[] { "Unreal.ini.default" }, "");
             ensureAndroidControllerDirectPatch(systemDir);
             Log.i(TAG_CONFIG, "Config root: " + root.getAbsolutePath());
             Log.i(TAG_CONFIG, "User.ini: " + new File(systemDir, "User.ini").getAbsolutePath());
@@ -317,11 +323,146 @@ final class UnrealDataPaths {
         // re-append or rewrite [Engine.Input] on every app update.  Reinstalling
         // the APK retains /Android/data, therefore existing user key bindings must
         // be treated as authoritative.
+        // UNREAL_ANDROID_SINGLE_INI_V148: all engine config lives in Unreal.ini (the DefaultIni). Default.ini
+        // and User.ini are NOT read for game config at runtime, so we patch ONLY Unreal.ini. The old
+        // User.ini writers (appendControllerInputFallbacks / ensureMenuKeyBinding) are gone — they wrote
+        // bindings that never loaded and only re-polluted an inert file. Escape=ShowMenu and the controller
+        // fallbacks are covered by ensureInputBindings on Unreal.ini below.
         patchNsdlControllerDefaults(new File(systemDir, "Unreal.ini"));
-        patchNsdlControllerDefaults(new File(systemDir, "Default.ini"));
-        appendControllerInputFallbacks(new File(systemDir, "User.ini"));
         repairRenderModule(new File(systemDir, "Unreal.ini"));
-        repairRenderModule(new File(systemDir, "Default.ini"));
+        repairCoreConfig(new File(systemDir, "Unreal.ini"));
+        ensureInputBindings(new File(systemDir, "Unreal.ini"));
+    }
+
+    // UNREAL_ANDROID_INPUT_BINDINGS_IN_DEFAULTINI_V144: UE1 loads AND saves [Engine.Input] from the
+    // DefaultIni (Unreal.ini), not User.ini. This port shipped its bindings only in User.ini, so they never
+    // loaded and fire/alt/move/look (which go through CauseInputEvent on config-bound keys) did nothing,
+    // while jump/crouch/next worked because they bind just-in-time. Fresh installs now get the full
+    // [Engine.Input] block from the shipped Unreal.ini; this heals existing devices whose Unreal.ini
+    // predates it. set-if-absent so in-game rebinds (SaveConfig also writes them to Unreal.ini) persist.
+    private static final String[][] DEFAULT_INPUT_BINDINGS = {
+        {"Escape","ShowMenu"},{"Enter","InventoryActivate"},
+        {"LeftMouse","Fire"},{"RightMouse","AltFire"},
+        {"MouseX","Axis aMouseX Speed=6.0"},{"MouseY","Axis aMouseY Speed=6.0"},
+        {"W","MoveForward"},{"S","MoveBackward"},{"A","StrafeLeft"},{"D","StrafeRight"},
+        {"Space","Jump"},{"C","Duck"},{"G","Grab"},
+        {"Joy1","Jump"},{"Joy2","Duck"},{"Joy3","Use"},{"Joy4","NextWeapon"},{"Joy5","ActivateTranslator"},
+        {"Joy8","Duck"},{"Joy9","CenterView"},{"Joy10","PrevWeapon"},{"Joy11","NextWeapon"},
+        {"Joy12","AltFire"},{"Joy13","Fire"},{"Joy14","TurnLeft"},{"Joy15","TurnRight"},{"Joy16","LookUp"},
+        {"JoyX","Axis aStrafe Speed=1"},{"JoyY","Axis aBaseY Speed=1"},
+        {"JoyU","Axis aTurn Speed=1"},{"JoyV","Axis aLookUp Speed=-1"},
+        {"JoyPovRight","NextWeapon"},{"JoyPovLeft","PrevWeapon"},
+        {"JoyPovUp","InventoryPrevious"},{"JoyPovDown","InventoryNext"},
+        {"UnknownD8","StrafeLeft"},{"UnknownD9","StrafeRight"},
+        {"UnknownDA","MoveForward"},{"UnknownDF","MoveBackward"},{"UnknownEA","LookDown"},
+        // UNREAL_ANDROID_INPUT_ALIASES_V148: the alias table that DEFINES what the bound command
+        // names mean. In UE1 "Duck", "StrafeLeft", "MoveForward", "TurnLeft" etc. are NOT built-in
+        // commands — they are aliases here that expand to "Axis aStrafe ..."/"Button bDuck ...".
+        // Without this table those bindings resolve to nothing, so on-screen crouch and the analog/
+        // digital move stick (and keyboard WASD) do nothing, while Jump/Fire still work because
+        // "Jump"/"Fire" are also PlayerPawn exec functions (the first token of their own alias).
+        {"Aliases[0]","(Command=\"Button bFire | Fire\",Alias=Fire)"},
+        {"Aliases[1]","(Command=\"Button bAltFire | AltFire\",Alias=AltFire)"},
+        {"Aliases[2]","(Command=\"Axis aBaseY  Speed=+300.0\",Alias=MoveForward)"},
+        {"Aliases[3]","(Command=\"Axis aBaseY  Speed=-300.0\",Alias=MoveBackward)"},
+        {"Aliases[4]","(Command=\"Axis aBaseX Speed=-150.0\",Alias=TurnLeft)"},
+        {"Aliases[5]","(Command=\"Axis aBaseX  Speed=+150.0\",Alias=TurnRight)"},
+        {"Aliases[6]","(Command=\"Axis aStrafe Speed=-300.0\",Alias=StrafeLeft)"},
+        {"Aliases[7]","(Command=\"Axis aStrafe Speed=+300.0\",Alias=StrafeRight)"},
+        {"Aliases[8]","(Command=\"Jump | Axis aUp Speed=+300.0\",Alias=Jump)"},
+        {"Aliases[9]","(Command=\"Button bDuck | Axis aUp Speed=-300.0\",Alias=Duck)"},
+        {"Aliases[10]","(Command=\"Button bLook\",Alias=Look)"},
+        {"Aliases[11]","(Command=\"Toggle bLook\",Alias=LookToggle)"},
+        {"Aliases[12]","(Command=\"ActivateItem\",Alias=InventoryActivate)"},
+        {"Aliases[13]","(Command=\"NextItem\",Alias=InventoryNext)"},
+        {"Aliases[14]","(Command=\"PrevItem\",Alias=InventoryPrevious)"},
+        {"Aliases[15]","(Command=\"Axis aLookUp Speed=+100.0\",Alias=LookUp)"},
+        {"Aliases[16]","(Command=\"Axis aLookUp Speed=-100.0\",Alias=LookDown)"},
+        {"Aliases[17]","(Command=\"Button bSnapLevel\",Alias=CenterView)"},
+        {"Aliases[18]","(Command=\"Button bRun\",Alias=Walking)"},
+        {"Aliases[19]","(Command=\"Button bStrafe\",Alias=Strafe)"},
+        {"Aliases[20]","(Command=\"ActivateTranslator\",Alias=ActivateTranslator)"},
+        {"Aliases[21]","(Command=\"ActivateHint\",Alias=ActivateHint)"},
+    };
+    private static void ensureInputBindings(File file) {
+        if (file == null || !file.isFile()) return;
+        try {
+            String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String p = text;
+            for (String[] kv : DEFAULT_INPUT_BINDINGS)
+                p = setIniValueIfAbsent(p, "Engine.Input", kv[0], kv[1]);
+            if (!p.equals(text)) {
+                Files.write(file.toPath(), p.getBytes(StandardCharsets.UTF_8));
+                Log.i(TAG_CONFIG, "Ensured [Engine.Input] default bindings: " + file.getAbsolutePath());
+            }
+        } catch (IOException ex) {
+            Log.w(TAG_CONFIG, "Could not ensure input bindings in " + file.getAbsolutePath() + ": " + ex);
+        }
+    }
+
+    // UNREAL_ANDROID_MENU_KEY_BINDING_V144: bind Escape -> ShowMenu so the in-game menu opens (from the
+    // hardware Back key, a gamepad Start, or the on-screen MENU button, all of which deliver IK_Escape).
+    // The stock KHG config binds this, but the port's minimal [Engine.Input] set omitted it, so ESC did
+    // nothing and "PRESS ESC TO BEGIN" / the menu were unreachable. Set-if-absent so a user rebind wins.
+    private static void ensureMenuKeyBinding(File file) {
+        if (file == null || !file.isFile()) return;
+        try {
+            String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String p = setIniValueIfAbsent(text, "Engine.Input", "Escape", "ShowMenu");
+            p = setIniValueIfAbsent(p, "Engine.Input", "Enter", "InventoryActivate");
+            if (!p.equals(text)) {
+                Files.write(file.toPath(), p.getBytes(StandardCharsets.UTF_8));
+                Log.i(TAG_CONFIG, "Ensured Escape=ShowMenu binding: " + file.getAbsolutePath());
+            }
+        } catch (IOException ex) {
+            Log.w(TAG_CONFIG, "Could not ensure menu key binding in " + file.getAbsolutePath() + ": " + ex);
+        }
+    }
+
+    // UNREAL_ANDROID_CORE_CONFIG_FIX_V144: guarantee the engine-critical config keys the port depends on so a
+    // stale or incomplete on-device Unreal.ini self-heals (copyAssetIfMissing never overwrites an
+    // existing file, so a config written by an older/broken build would otherwise stay broken forever). These
+    // keys are fixed for this port and are not user-tunable:
+    //  - [URL] needs the full FURL field set. Without MapExt/Protocol/Port, FURL cannot parse the local startup
+    //    map "Klingon.unr" as a map file and misreads "Klingon.unr/Index.unr" as a network host/map, so Browse
+    //    takes the network path and returns failure -> fatal "Failed to enter Klingon.unr".
+    //  - [Core.System] Paths are the package (.u/.unr/.utx/...) search paths. UE1 reads them as INDEXED keys
+    //    (Paths[0]=...), not repeated "Paths=" lines; without the indexed form GSys->Paths is empty and no
+    //    package (not even the boot map) can be found.
+    private static void repairCoreConfig(File file) {
+        if (file == null || !file.isFile()) return;
+        try {
+            String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String p = text;
+            // Engine subsystem classes the engine resolves via LoadClass("ini:Engine.Engine.X").
+            // Missing any of these is fatal ("Can't find 'ini:Engine.Engine.X' in configuration file").
+            p = setIniValue(p, "Engine.Engine", "Canvas", "Engine.Canvas");
+            p = setIniValue(p, "Engine.Engine", "Input", "Engine.Input");
+            p = setIniValue(p, "Engine.Engine", "Console", "Engine.Console");
+            p = setIniValue(p, "Engine.Engine", "NetworkDevice", "IpDrv.TcpNetDriver");
+            p = setIniValueIfAbsent(p, "Engine.Engine", "DefaultGame", "Klingons.SinglePlayer");
+            p = setIniValueIfAbsent(p, "Engine.Engine", "DefaultServerGame", "Klingons.DeathMatchGame");
+            // Player spawn resolves LoadClass("ini:DefaultPlayer.Class") from Unreal.ini (not User.ini).
+            p = setIniValueIfAbsent(p, "DefaultPlayer", "Name", "Player");
+            p = setIniValue(p, "DefaultPlayer", "Class", "Klingons.DMMale");
+            p = setIniValueIfAbsent(p, "URL", "Protocol", "unreal");
+            p = setIniValue(p, "URL", "MapExt", "unr");
+            p = setIniValue(p, "URL", "SaveExt", "usa");
+            p = setIniValue(p, "URL", "Port", "7777");
+            p = setIniValueIfAbsent(p, "URL", "Map", "Index.unr");
+            p = setIniValueIfAbsent(p, "URL", "LocalMap", "Klingon.unr");
+            p = setIniValue(p, "Core.System", "Paths[0]", "../System/*.u");
+            p = setIniValue(p, "Core.System", "Paths[1]", "../Maps/*.unr");
+            p = setIniValue(p, "Core.System", "Paths[2]", "../Textures/*.utx");
+            p = setIniValue(p, "Core.System", "Paths[3]", "../Sounds/*.uax");
+            p = setIniValue(p, "Core.System", "Paths[4]", "../Music/*.umx");
+            if (!p.equals(text)) {
+                Files.write(file.toPath(), p.getBytes(StandardCharsets.UTF_8));
+                Log.i(TAG_CONFIG, "Repaired core engine config (URL/Paths): " + file.getAbsolutePath());
+            }
+        } catch (IOException ex) {
+            Log.w(TAG_CONFIG, "Could not repair core config in " + file.getAbsolutePath() + ": " + ex);
+        }
     }
 
     // UNREAL_ANDROID_RENDER_MODULE_FIX_V143: the [Engine.Engine] Render key is the software render
@@ -356,11 +497,10 @@ final class UnrealDataPaths {
             patched = setIniValue(patched, "NSDLDrv.NSDLClient", "AndroidNativeController", "True");
             patched = setIniValue(patched, "NSDLDrv.NSDLClient", "AndroidNativeDirectInput", "True"); // UNREAL_ANDROID_CONFIG_PRESERVE_V139
             // UNREAL_ANDROID_RIGHTSTICK_DEFAULT_SENSITIVITY_V126: this launch-time patcher is the CANONICAL
-            // controller default (it force-writes Default.ini every run, which overrides Unreal.ini). It was
-            // pinning RightStickScale at 1.00 — silently capping look sensitivity no matter what the ini said.
-            // Seed sane sensitivity defaults but PRESERVE the player's edits (set-if-absent), so these are
-            // live-tunable in Default.ini. (Effective sensitivity was silently stuck at 1.0 before because the
-            // old force-overwrite pinned it every launch.) 2.5 = a moderate default; tune up/down to taste.
+            // controller default, applied to Unreal.ini (the single engine config file). An earlier build
+            // force-pinned RightStickScale at 1.00 — silently capping look sensitivity no matter what the ini
+            // said. Seed sane sensitivity defaults but PRESERVE the player's edits (set-if-absent), so these
+            // are live-tunable in Unreal.ini. 2.5 = a moderate default; tune up/down to taste.
             patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeRightStickScale", "2.50");
             patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeLeftStickScale", "2.50"); // ANDROID_LEFTSTICK_NATIVE_SENSITIVITY_V127
             patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeRightStickSmoothing", "False"); // ANDROID_RIGHT_STICK_SMOOTHING_TOGGLE_V129
@@ -507,7 +647,7 @@ final class UnrealDataPaths {
 
     // UNREAL_ANDROID_RIGHTSTICK_DEFAULT_SENSITIVITY_V126: seed a default but PRESERVE a user-edited value.
     // Unlike setIniValue (which force-overwrites every launch), this only writes the key when it is missing,
-    // so the player can tune sensitivity/smoothing in Default.ini and have it persist across launches.
+    // so the player can tune sensitivity/smoothing in Unreal.ini and have it persist across launches.
     private static String setIniValueIfAbsent(String text, String section, String key, String value) {
         if (text == null) text = "";
         String normalized = text.replace("\r\n", "\n").replace('\r', '\n');

@@ -14,7 +14,6 @@ layout(push_constant) uniform ScenePushConstants
 out gl_PerVertex
 {
     vec4 gl_Position;
-    float gl_ClipDistance[1];
 };
 
 layout(location = 0) in uint aFlags;
@@ -34,11 +33,12 @@ layout(location = 4) out vec2 texCoord4;
 layout(location = 5) out vec4 color;
 layout(location = 6) flat out uint hitIndex;
 layout(location = 7) flat out ivec4 textureBinds;
+layout(location = 8) out float clipNear; // [KHG] near-plane clip distance -> fragment discard (Mali-safe, replaces gl_ClipDistance)
 
 void main()
 {
     gl_Position = objectToProjection * vec4(aPosition, 1.0);
-    gl_ClipDistance[0] = dot(nearClip, vec4(aPosition, 1.0));
+    clipNear = dot(nearClip, vec4(aPosition, 1.0));
     flags = aFlags;
     texCoord = aTexCoord;
     texCoord2 = aTexCoord2;

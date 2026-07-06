@@ -229,7 +229,7 @@ static bool ShowDueVideoFrame( double clk )
 // window is an irregular flat-top hex, widest BELOW centre; and (2) colour-keying the content's
 // surround -- which fails because the Klingon's black hair is as dark as the surround and gets
 // punched out (the "messed-up colours" bug). Measured window (640x480): centre ~(0.50,0.47),
-// x[162..474] y[125..325].
+// x[162..474] y[125..325]. See FMV_COMM_FRAME_RE.md.
 // Composite (framed Y/C) state. The decorated console frame is composited in the Vulkan present path
 // (UGameEngine::Draw): the content clip is hex-cut and the retained overlay (gOverlayRGBA, baked window
 // alpha) is drawn masked on top. No GL textures/shaders here anymore.

@@ -1746,10 +1746,13 @@ std::vector<VulkanCompatibleDevice> VulkanDeviceBuilder::FindDevices(const std::
 		if (!requiredExtensionSearch.empty())
 			continue;
 
-		// Check if all required features are there
+		// Check if all required features are there.
+		// [KHG] multiDrawIndirect intentionally NOT required: this renderer issues no indirect draws, and
+		// many mobile GPUs report multiDrawIndirect=VK_FALSE. Requiring it rejected otherwise fully
+		// bindless-capable Vulkan devices and forced a non-existent GLES fallback (assert RenDev). It is
+		// still enabled below when the device does support it.
 		if (info.Features.Features.samplerAnisotropy != VK_TRUE ||
 			info.Features.Features.fragmentStoresAndAtomics != VK_TRUE ||
-			info.Features.Features.multiDrawIndirect != VK_TRUE ||
 			info.Features.Features.independentBlend != VK_TRUE)
 			continue;
 

@@ -528,13 +528,31 @@ void UObject::execContext( FFrame& Stack, BYTE*& Result )
 
 	// Execute or skip the following expression in the actor's context.
 	UObject* NewContext = *(UObject**)Addr;
-	if( NewContext != NULL )
+	// [KHG] Reject NULL, corrupt AND stale context pointers, not just NULL. UE1 only null-checks here, so a
+	// script object reference that arrives as a WILD value (observed on 64-bit: 0xXXXX00000000 — a 4-byte
+	// value mis-packed into the high half of the 8-byte pointer slot) passes, and the following
+	// GetIndex()/FindFunctionChecked dereferences it -> SIGSEGV. Do a cheap plausibility test FIRST (a real
+	// heap UObject is 8-aligned, above the reserved low pages, and never has all-zero low 32 bits), so we
+	// never dereference a wild pointer; THEN confirm the object is live in the table (catches freed/stale
+	// references too). Anything that fails is treated exactly like Accessed None.
+	const UPTRINT KhgPtr = (UPTRINT)NewContext;
+	UBOOL bValidContext =
+		NewContext != NULL
+		&& (KhgPtr & (UPTRINT)7) == 0
+		&& KhgPtr >= (UPTRINT)0x10000
+		&& (KhgPtr & (UPTRINT)0xFFFFFFFFu) != 0
+		&& GObj.Objects.IsValidIndex( NewContext->GetIndex() )
+		&& GObj.Objects( NewContext->GetIndex() ) == NewContext;
+	if( bValidContext )
 	{
 		Stack.Code += 3;
 		Stack.Step( NewContext, Result );
 	}
 	else
 	{
+		if( NewContext != NULL )
+			debugf( NAME_ScriptWarning, "Accessed invalid object (%p) in %s", (void*)NewContext,
+				Stack.Node ? Stack.Node->GetFullName() : "?" );
 		Stack.ScriptWarn( 0, "Accessed None" );
 		INT wSkip = Stack.ReadWord();
 		BYTE bSize = *Stack.Code++;

@@ -59,7 +59,7 @@ UVulkanRenderDevice::UVulkanRenderDevice()
 	BloomAmount = 128;
 	LODBias = 0.0f;
 	LightMode = 0;          // [KHG] GL parity: no actor *1.5 (flag 32), no lightmap*2 disable (flag 64)
-	GlideGamma = 1;         // [KHG] 3dfx-style look: present gamma = 0.5+1.5*Brightness; 0 = old flat Brightness*2.0
+	GlideGamma = 1;         // [KHG] 3dfx Glide look: present gamma = 0.5+1.5*Brightness (GlideDrv Flush@107027E0); 0 = old flat Brightness*2.0
 	GammaCorrectScreenshots = 1;
 	VkDeviceIndex = 0;
 	VkDebug = 0;
@@ -926,7 +926,7 @@ vec4 UVulkanRenderDevice::ApplyInverseGamma( vec4 color )
 {
 	if( Viewport->IsOrtho() )
 		return color;
-	// [KHG] 3dfx-style gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
+	// [KHG] 3dfx Glide gamma ramp grGammaCorrectionValue(0.5+1.5*Brightness) (GlideDrv Flush@107027E0); GlideGamma=0 restores the flat Brightness*2.0.
 	float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 	float gammaRed = Max( brightness + GammaOffset + GammaOffsetRed, 0.001f );
 	float gammaGreen = Max( brightness + GammaOffset + GammaOffsetGreen, 0.001f );
@@ -1132,10 +1132,10 @@ void UVulkanRenderDevice::BlitSceneToPostprocess()
 	// full-frame ColorBuffer->PPImage[0] blit entirely — that blit is a wasted read+write of the whole
 	// framebuffer every frame, especially costly on tile-based (Mali) GPUs. Pixels are identical:
 	// PPImage[0] was only ever a 1:1 VK_FILTER_NEAREST copy of ColorBuffer (same R16G16B16A16_SFLOAT
-	// format). Bloom is off by default, so this is the normal path. Correct-by-construction: the scene
-	// render pass leaves ColorBuffer in COLOR_ATTACHMENT_OPTIMAL; we move it to SHADER_READ_ONLY for the
-	// present sample; the next frame's Lock barrier uses oldLayout=UNDEFINED, so leaving ColorBuffer in
-	// SHADER_READ_ONLY here is safe.
+	// format). Bloom is not part of retail KHG and is off by default, so this is the normal path.
+	// Correct-by-construction: the scene render pass leaves ColorBuffer in COLOR_ATTACHMENT_OPTIMAL; we
+	// move it to SHADER_READ_ONLY for the present sample; the next frame's Lock barrier uses
+	// oldLayout=UNDEFINED, so leaving ColorBuffer in SHADER_READ_ONLY here is safe.
 	PresentFromColorBuffer = ( buffers->SceneSamples == VK_SAMPLE_COUNT_1_BIT && !Bloom && !HitData );
 	if( PresentFromColorBuffer )
 	{
@@ -1581,7 +1581,7 @@ PresentPushConstants UVulkanRenderDevice::GetPresentPushConstants()
 	}
 	else
 	{
-		// [KHG] 3dfx-style gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
+		// [KHG] 3dfx Glide gamma ramp grGammaCorrectionValue(0.5+1.5*Brightness) (GlideDrv Flush@107027E0); GlideGamma=0 restores the flat Brightness*2.0.
 		float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 
 		if( GammaMode == 0 )
