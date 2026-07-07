@@ -71,13 +71,24 @@ The app ships no game assets. On first launch, if no data is found, it asks for 
 *Klingon Honor Guard* data. Two ways:
 
 - **In-app import (easiest):** the launcher offers a **folder picker** and a **ZIP picker**.
-  Point it at your retail `Unreal` data folder (or a ZIP of it) and it copies the files into
-  place and starts the game. No storage permission is required. Next launches go straight in.
-- **Manual (adb):** copy the data under `/sdcard/Unreal`, preserving the original layout —
-  `/sdcard/Unreal/System`, `/Maps`, `/Textures`, `/Sounds`, `/Music`, with the `.avi` movies in
-  `System/`. Saves are written to `/sdcard/Unreal/Save`.
+  Point it at your retail `Unreal` data folder (or a ZIP of it) and it copies the files into the
+  app's private game folder and starts the game. No storage permission is required. Next launches
+  go straight in.
+- **Manual (adb):** copy the data into the app's private OBB folder, preserving the original
+  layout — `/sdcard/Android/obb/com.khg.android/Unreal/System`, `/Maps`, `/Textures`, `/Sounds`,
+  `/Music`, with the `.avi` movies in `System/`. Saves are written to
+  `/sdcard/Android/obb/com.khg.android/Unreal/Save`.
 
 Exact `adb push` commands for manual staging are in **[docs/BUILD.md](docs/BUILD.md)**.
+
+> **Updating from v0.9.0 or earlier?** As of **v0.9.2** all game data, saves, and settings live in
+> one place — the app's own private OBB folder (`Android/obb/com.khg.android/Unreal`) — instead of a
+> scattered SD-card location. Because of the move:
+>
+> - **You will be asked to import your game data again** on the first launch after updating. Just
+>   re-run the in-app folder/ZIP import, exactly like a first install.
+> - **Your existing save games are imported automatically** the first time you launch this build.
+>   Your old files are left untouched; backing up your saves first never hurts.
 
 ## Known issues
 
