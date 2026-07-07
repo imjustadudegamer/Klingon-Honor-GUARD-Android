@@ -130,6 +130,16 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
         hideSystemUi();
         selectedRoot = selectedRootFromIntentOrScan();
         UnrealDataPaths.ensureWritableConfigFiles(this, selectedRoot); // UNREAL_ANDROID_CONFIG_BOOTSTRAP_REV31_PATH_FALLBACK_MORE_ROOTS
+        // UNREAL_ANDROID_OBB_ROOT_V151: hand the native engine the EXACT root we just bootstrapped
+        // config into (the OBB dir), so its filesystem layer never re-scans to a different location.
+        // Native reads UE1_ANDROID_ROOT first; this must be set before super.onCreate() starts SDL/
+        // the native thread. Same process, so libc getenv() on the native thread sees it.
+        try {
+            android.system.Os.setenv("UE1_ANDROID_ROOT", selectedRoot.getAbsolutePath(), true);
+            android.util.Log.i(UnrealDataPaths.TAG_STARTUP, "UE1_ANDROID_ROOT=" + selectedRoot.getAbsolutePath());
+        } catch (Throwable t) {
+            android.util.Log.w(UnrealDataPaths.TAG_STARTUP, "Could not set UE1_ANDROID_ROOT env: " + t);
+        }
         super.onCreate(savedInstanceState);
 
         inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
@@ -455,7 +465,6 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
                 bringTouchOverlayToFrontV125();
                 return;
             }
-            ensureTouchControlsConfigDefaultV124();
             touchOverlayViewV124 = new UnrealTouchOverlayViewV124(this);
             android.view.ViewGroup.LayoutParams lp = new android.view.ViewGroup.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
@@ -496,53 +505,13 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
         return new File(root, "System");
     }
 
-    private void ensureTouchControlsConfigDefaultV124() {
-        File systemDir = unrealSystemDirV124();
-        if (systemDir == null) return;
-        File ini = new File(systemDir, "User.ini");
-        try {
-            if (!systemDir.exists()) systemDir.mkdirs();
-            String text = ini.exists() ? readSmallTextFileV124(ini) : "";
-            if (text.indexOf("bTouchControls=") < 0) {
-                java.io.FileWriter fw = new java.io.FileWriter(ini, true);
-                try {
-                    fw.write("\n; UNREAL_ANDROID_TOUCH_OVERLAY_V125 default enabled on first start\n");
-                    fw.write("[Unreal.UnrealOptionsMenu]\n");
-                    fw.write("bTouchControls=True\n");
-                } finally {
-                    fw.close();
-                }
-                android.util.Log.i(TAG, "UNREAL_ANDROID_TOUCH_OVERLAY_V125 default config appended to " + ini.getAbsolutePath());
-            }
-        } catch (Throwable t) {
-            android.util.Log.w(TAG, "UNREAL_ANDROID_TOUCH_OVERLAY_V125 could not ensure default", t);
-        }
-    }
-
-    private String readSmallTextFileV124(File file) throws java.io.IOException {
-        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(file));
-        try {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            int lines = 0;
-            while ((line = br.readLine()) != null && lines++ < 4096) {
-                sb.append(line).append('\n');
-            }
-            return sb.toString();
-        } finally {
-            br.close();
-        }
-    }
-
     private boolean readTouchControlsEnabledV124() {
         File systemDir = unrealSystemDirV124();
         Boolean found = null;
         if (systemDir != null) {
-            // UNREAL_ANDROID_SINGLE_INI_V148: Unreal.ini is the authoritative source (the in-game options
-            // toggle SaveConfig-writes bTouchControls there). Read it LAST so it wins. User.ini/AndroidUI.ini
-            // are legacy fallbacks for older installs that seeded the flag elsewhere; Default.ini is gone.
-            found = readTouchControlsFlagV124(new File(systemDir, "User.ini"), found);
-            found = readTouchControlsFlagV124(new File(systemDir, "AndroidUI.ini"), found);
+            // UNREAL_ANDROID_SINGLE_INI_V151: Unreal.ini is the one and only config file. The in-game
+            // options toggle SaveConfig-writes bTouchControls there, and the shipped/healed Unreal.ini
+            // seeds it. The old User.ini/AndroidUI.ini fallbacks were removed with those files.
             found = readTouchControlsFlagV124(new File(systemDir, "Unreal.ini"), found);
         }
         return found != null ? found.booleanValue() : true;

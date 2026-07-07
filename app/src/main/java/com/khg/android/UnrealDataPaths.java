@@ -4,7 +4,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Environment;
 import android.os.Build;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
@@ -101,7 +100,14 @@ final class UnrealDataPaths {
     }
 
     static File primaryAppRoot(Context context) {
-        File base = context.getExternalFilesDir(null);
+        // UNREAL_ANDROID_OBB_ROOT_V151: consolidate ALL game data, save games, and config under the
+        // app's OBB directory (Android/obb/<pkg>/Unreal). This is app-private (needs no storage
+        // permission on any Android version), deterministic (no more scanning arbitrary SD-card /
+        // volume locations), and is the single root that BOTH the Java bootstrap and the native
+        // engine agree on. getObbDir() may return null on exotic setups, so fall back to the old
+        // app-specific external dir, then internal storage.
+        File base = context.getObbDir();
+        if (base == null) base = context.getExternalFilesDir(null);
         if (base == null) base = context.getFilesDir();
         return new File(base, "Unreal");
     }
@@ -119,62 +125,16 @@ final class UnrealDataPaths {
     }
 
     static List<File> candidateRoots(Context context) {
+        // UNREAL_ANDROID_OBB_ROOT_V151: OBB is the ONE and ONLY data root. The old broad scan of
+        // /sdcard/Unreal, every /storage/* and /mnt/* volume, and each external-files dir was
+        // removed. That scan caused the game to "randomly" pick up data from an arbitrary volume
+        // and — worse — could diverge from the root the native engine independently chose (config
+        // written to root A, engine boots root B), which surfaces at startup as
+        // Core.Errors.ConfigNotFound / Engine.Errors.LoadEntry. There is now exactly one candidate.
         ArrayList<File> out = new ArrayList<>();
         HashSet<String> seen = new HashSet<>();
-
         addCandidate(out, seen, primaryAppRoot(context));
-        File[] appExternalDirs = context.getExternalFilesDirs(null);
-        if (appExternalDirs != null) {
-            for (File appDir : appExternalDirs) {
-                if (appDir == null) continue;
-                addCandidate(out, seen, new File(appDir, "Unreal"));
-            }
-        }
-
-        try {
-            File publicRoot = Environment.getExternalStorageDirectory();
-            if (publicRoot != null) addCandidate(out, seen, new File(publicRoot, "Unreal"));
-        } catch (Throwable ignored) {}
-        addCandidate(out, seen, new File("/storage/emulated/0/Unreal"));
-        addCandidate(out, seen, new File("/sdcard/Unreal"));
-        addCandidate(out, seen, new File("/storage/sdcard0/Unreal"));
-        addCandidate(out, seen, new File("/mnt/sdcard/Unreal"));
-        addCandidate(out, seen, new File("/mnt/usbdrive/Unreal"));
-        addCandidate(out, seen, new File("/mnt/usbdrive0/Unreal"));
-        addCandidate(out, seen, new File("/mnt/usb_storage/Unreal"));
-
-        if (appExternalDirs != null) {
-            for (File appDir : appExternalDirs) {
-                File storageRoot = storageRootFromExternalFilesDir(appDir);
-                if (storageRoot != null) addCandidate(out, seen, new File(storageRoot, "Unreal"));
-            }
-        }
-
-        File[] volumes = new File("/storage").listFiles();
-        if (volumes != null) {
-            for (File volume : volumes) {
-                String name = volume.getName();
-                if ("self".equals(name) || "emulated".equals(name)) continue;
-                addCandidate(out, seen, new File(volume, "Unreal"));
-            }
-        }
-
-        File[] mntVolumes = new File("/mnt").listFiles();
-        if (mntVolumes != null) {
-            for (File volume : mntVolumes) {
-                String name = volume.getName();
-                if ("runtime".equals(name) || "asec".equals(name) || "obb".equals(name)) continue;
-                addCandidate(out, seen, new File(volume, "Unreal"));
-            }
-        }
         return out;
-    }
-
-    private static File storageRootFromExternalFilesDir(File appDir) {
-        if (appDir == null) return null;
-        File p = appDir;
-        for (int i = 0; i < 4 && p != null; ++i) p = p.getParentFile();
-        return p;
     }
 
     private static void addCandidate(ArrayList<File> out, HashSet<String> seen, File candidate) {
@@ -243,15 +203,21 @@ final class UnrealDataPaths {
         if (root == null) return;
         File systemDir = new File(root, "System");
         if (!systemDir.exists() && !systemDir.mkdirs()) Log.w(TAG_CONFIG, "Could not create System directory: " + systemDir.getAbsolutePath());
-        // UNREAL_ANDROID_SINGLE_INI_V148: Unreal.ini is the ONE engine config file (it is the DefaultIni the
-        // engine loads AND saves — UnConfig.cpp/UnPlat.cpp). Default.ini used to be shipped and patched in
-        // parallel, but it is only a first-run copy SEED (UnPlat.cpp copies it to Unreal.ini only when
-        // Unreal.ini is missing) and is never read at runtime, so it was pure dual-maintenance. We no longer
-        // ship or touch it; everything is unified into Unreal.ini.
+        // UNREAL_ANDROID_SINGLE_INI_V151: Unreal.ini is the ONE AND ONLY config file. It is the DefaultIni
+        // the engine loads AND saves (UnConfig.cpp/UnPlat.cpp, Filename=NULL). We used to also ship/copy
+        // User.ini (an inert stub the engine never loads — verified: zero engine references),
+        // AndroidController.ini (pure comments, read by nothing), and AndroidUI.ini (only its UIScale key
+        // was read, now folded into Unreal.ini's [Unreal.UnrealOptionsMenu]). All three are gone so there
+        // are no stray, unused .ini files created or loaded at runtime — one file, one source of truth.
         copyAssetIfMissing(context, "ue1_config/Unreal.ini", new File(systemDir, "Unreal.ini"));
-        copyAssetIfMissing(context, "ue1_config/User.ini", new File(systemDir, "User.ini"));
-        copyAssetIfMissing(context, "ue1_config/AndroidController.ini", new File(systemDir, "AndroidController.ini"));
-        copyAssetIfMissing(context, "ue1_config/AndroidUI.ini", new File(systemDir, "AndroidUI.ini"));
+        // UNREAL_ANDROID_CONFIG_HARDEN_V151: copyAssetIfMissing only writes when the file is ABSENT.
+        // A truncated or partially-written Unreal.ini (an interrupted first-run copy, a file left by
+        // an older/broken build, or one native accidentally stubbed) is otherwise kept as-is and then
+        // fails deep in boot with Core.Errors.ConfigNotFound / Engine.Errors.LoadEntry because whole
+        // engine/game sections are missing. Heal it in place: write the full template if it is
+        // missing/empty, otherwise merge back any [Section] that the shipped asset has but the
+        // on-device file lacks. Existing sections/keys (including the player's rebinds) are untouched.
+        ensureUnrealIniComplete(context, new File(systemDir, "Unreal.ini"), "ue1_config/Unreal.ini");
     }
 
     private static void copyAssetIfMissing(Context context, String asset, File out) {
@@ -265,6 +231,93 @@ final class UnrealDataPaths {
         } catch (IOException ex) {
             Log.w(TAG_CONFIG, "Could not install default config " + out.getAbsolutePath() + ": " + ex);
         }
+    }
+
+    // UNREAL_ANDROID_CONFIG_HARDEN_V151: guarantee a COMPLETE Unreal.ini at the engine root.
+    // - Missing or effectively empty file  -> write the full shipped template.
+    // - Present but incomplete             -> append every [Section] the asset has that the on-device
+    //                                         file lacks (merge; never rewrites existing sections).
+    // This is the force-creation hardening: a partial config no longer boots into ConfigNotFound.
+    private static void ensureUnrealIniComplete(Context context, File target, String asset) {
+        try {
+            String template;
+            try (InputStream in = context.getAssets().open(asset)) {
+                template = new String(readAllBytes(in), StandardCharsets.UTF_8);
+            }
+            if (template.trim().length() == 0) return; // asset unreadable/empty — nothing to enforce
+
+            String current = target.isFile()
+                    ? new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8)
+                    : "";
+            if (current.trim().length() == 0) {
+                Files.write(target.toPath(), template.getBytes(StandardCharsets.UTF_8));
+                Log.w(TAG_CONFIG, "Unreal.ini was missing/empty; wrote full template: " + target.getAbsolutePath());
+                return;
+            }
+
+            HashSet<String> present = sectionHeadersLower(current);
+            Map<String, String> templateSections = sectionBlocks(template);
+            StringBuilder merged = new StringBuilder(current);
+            int healed = 0;
+            for (Map.Entry<String, String> e : templateSections.entrySet()) {
+                if (present.contains(e.getKey())) continue;
+                if (merged.length() > 0 && merged.charAt(merged.length() - 1) != '\n') merged.append('\n');
+                merged.append('\n').append(e.getValue());
+                healed++;
+            }
+            if (healed > 0) {
+                Files.write(target.toPath(), merged.toString().getBytes(StandardCharsets.UTF_8));
+                Log.w(TAG_CONFIG, "Healed incomplete Unreal.ini: merged " + healed
+                        + " missing section(s): " + target.getAbsolutePath());
+            }
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "Could not verify/heal Unreal.ini completeness for " + target.getAbsolutePath() + ": " + t);
+        }
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[16 * 1024];
+        int read;
+        while ((read = in.read(buf)) >= 0) bos.write(buf, 0, read);
+        return bos.toByteArray();
+    }
+
+    // Set of lowercased section names ("engine.engine", "core.system", ...) present in an ini text.
+    private static HashSet<String> sectionHeadersLower(String text) {
+        HashSet<String> out = new HashSet<>();
+        if (text == null) return out;
+        for (String raw : text.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            String t = raw.trim();
+            if (t.length() >= 2 && t.charAt(0) == '[' && t.charAt(t.length() - 1) == ']') {
+                out.add(t.substring(1, t.length() - 1).trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        return out;
+    }
+
+    // Ordered map lowercased-section-name -> full block text (header line through the line before the
+    // next header). Preserves the asset's section order so merged-in sections read naturally.
+    private static Map<String, String> sectionBlocks(String text) {
+        java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
+        if (text == null) return out;
+        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        String currentKey = null;
+        StringBuilder block = null;
+        for (String line : lines) {
+            String t = line.trim();
+            boolean isHeader = t.length() >= 2 && t.charAt(0) == '[' && t.charAt(t.length() - 1) == ']';
+            if (isHeader) {
+                if (currentKey != null) out.put(currentKey, block.toString());
+                currentKey = t.substring(1, t.length() - 1).trim().toLowerCase(Locale.ROOT);
+                block = new StringBuilder();
+                block.append(line).append('\n');
+            } else if (currentKey != null) {
+                block.append(line).append('\n');
+            }
+        }
+        if (currentKey != null) out.put(currentKey, block.toString());
+        return out;
     }
 
     static void normalizeConfigForDetectedData(File root) {
@@ -300,17 +353,15 @@ final class UnrealDataPaths {
         if (root == null) return;
         try {
             ensureDirectoryLayout(root);
+            migrateLegacySavesToObb(context, root);
             installDefaultConfigsIfNeeded(context, root);
             File systemDir = new File(root, "System");
-            // UNREAL_ANDROID_SINGLE_INI_V148: User.ini is an inert stub — all config lives in Unreal.ini.
-            // If it is somehow missing, seed an empty, comment-only file (no [Engine.Input]/[DefaultPlayer],
-            // which would be dead weight and a drift trap).
-            ensureConfigFile(systemDir, "User.ini", new String[] { "DefUser.ini", "DefaultUser.ini" },
-                    "; Inert stub — all config lives in Unreal.ini (see the shipped User.ini header).\n");
+            // UNREAL_ANDROID_SINGLE_INI_V151: Unreal.ini is the only config file — no User.ini stub is
+            // seeded anymore (the engine never loads it).
             ensureConfigFile(systemDir, "Unreal.ini", new String[] { "Unreal.ini.default" }, "");
             ensureAndroidControllerDirectPatch(systemDir);
             Log.i(TAG_CONFIG, "Config root: " + root.getAbsolutePath());
-            Log.i(TAG_CONFIG, "User.ini: " + new File(systemDir, "User.ini").getAbsolutePath());
+            Log.i(TAG_CONFIG, "Config file: " + new File(systemDir, "Unreal.ini").getAbsolutePath());
         } catch (Throwable t) {
             Log.e(TAG_CONFIG, "Config bootstrap failed for root=" + root.getAbsolutePath(), t);
         }
@@ -692,6 +743,74 @@ final class UnrealDataPaths {
         try (FileInputStream in = new FileInputStream(src); FileOutputStream out = new FileOutputStream(dst)) {
             copyStream(in, out);
         }
+    }
+
+    // UNREAL_ANDROID_OBB_SAVE_MIGRATION_V151: one-time, non-destructive rescue of on-device save games.
+    // Before V151 the data root was getExternalFilesDir()/Unreal, so a returning player's *.usa saves
+    // live in that OLD Save/ dir. The new OBB build won't read there, and SAF can't pick Android/data to
+    // re-import them, so we auto-copy them once: if the OBB Save/ has no saves yet, copy every file from
+    // the first legacy Save/ dir that has any. The old files are LEFT IN PLACE (never deleted). Game data
+    // still comes via the normal import; only saves are migrated.
+    static void migrateLegacySavesToObb(Context context, File obbRoot) {
+        try {
+            if (context == null || obbRoot == null) return;
+            File targetSave = new File(obbRoot, "Save");
+            if (hasAnySaveFile(targetSave)) return; // OBB already has saves — never overwrite
+
+            ArrayList<File> legacySaveDirs = new ArrayList<>();
+            File ext = context.getExternalFilesDir(null);
+            if (ext != null) legacySaveDirs.add(new File(ext, "Unreal/Save"));
+            File internal = context.getFilesDir();
+            if (internal != null) legacySaveDirs.add(new File(internal, "Unreal/Save"));
+
+            String targetCanonical;
+            try { targetCanonical = targetSave.getCanonicalPath(); } catch (IOException e) { targetCanonical = targetSave.getAbsolutePath(); }
+
+            for (File src : legacySaveDirs) {
+                if (src == null || !src.isDirectory()) continue;
+                String srcCanonical;
+                try { srcCanonical = src.getCanonicalPath(); } catch (IOException e) { srcCanonical = src.getAbsolutePath(); }
+                if (srcCanonical.equals(targetCanonical)) continue; // OBB fell back to the same dir — nothing to do
+                if (!hasAnySaveFile(src)) continue;
+
+                int copied = copyFlatFiles(src, targetSave);
+                if (copied > 0) {
+                    Log.i(TAG_STARTUP, "Auto-imported " + copied + " legacy save file(s): "
+                            + src.getAbsolutePath() + " -> " + targetSave.getAbsolutePath());
+                    return; // migrate from the first legacy dir that had saves
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG_STARTUP, "Legacy save auto-import failed: " + t);
+        }
+    }
+
+    private static boolean hasAnySaveFile(File saveDir) {
+        if (saveDir == null || !saveDir.isDirectory()) return false;
+        File[] files = saveDir.listFiles((d, name) -> name.toLowerCase(Locale.ROOT).endsWith(".usa"));
+        return files != null && files.length > 0;
+    }
+
+    private static int copyFlatFiles(File srcDir, File dstDir) {
+        File[] files = srcDir.listFiles();
+        if (files == null) return 0;
+        if (!dstDir.exists() && !dstDir.mkdirs()) {
+            Log.w(TAG_STARTUP, "Could not create OBB Save dir: " + dstDir.getAbsolutePath());
+            return 0;
+        }
+        int copied = 0;
+        for (File f : files) {
+            if (f == null || !f.isFile()) continue; // UE1 saves are flat files; skip any subdirs
+            File out = new File(dstDir, f.getName());
+            if (out.exists()) continue; // never clobber an existing OBB save
+            try {
+                copyFile(f, out);
+                copied++;
+            } catch (IOException ex) {
+                Log.w(TAG_STARTUP, "Could not migrate save " + f.getAbsolutePath() + ": " + ex);
+            }
+        }
+        return copied;
     }
 
     private static void copyStream(InputStream in, FileOutputStream out) throws IOException {

@@ -36,7 +36,7 @@ static FLOAT AndroidCanvasScale()
 	static FLOAT Scale = -1.0f;
 	if( Scale < 0.0f )
 	{
-		Scale = 3.5f; // UNREAL_ANDROID_CANVAS_UI_SCALE_RANGE_V128 default raised 2.0->3.5 (bigger 2D fonts; AndroidUI.ini UIScale still overrides)
+		Scale = 3.5f; // UNREAL_ANDROID_CANVAS_UI_SCALE_RANGE_V128 default (overridden by UIScale below)
 
 		const char* EnvScale = getenv( "UE1_ANDROID_UI_SCALE" );
 		if( EnvScale && EnvScale[0] )
@@ -45,19 +45,32 @@ static FLOAT AndroidCanvasScale()
 		}
 		else
 		{
+			// UNREAL_ANDROID_SINGLE_INI_V151: read UIScale from Unreal.ini's [Unreal.UnrealOptionsMenu]
+			// section (the single config file), NOT the retired AndroidUI.ini. Section-aware so a
+			// same-named key in another section can never be picked up by accident.
 			const char* Root = getenv( "UE1_ANDROID_ROOT" );
 			if( Root && Root[0] )
 			{
 				char Path[1024];
-				snprintf( Path, sizeof(Path), "%s/System/AndroidUI.ini", Root );
+				snprintf( Path, sizeof(Path), "%s/System/Unreal.ini", Root );
 				FILE* F = fopen( Path, "r" );
 				if( F )
 				{
 					char Line[256];
+					UBOOL InOptionsMenu = false;
 					while( fgets( Line, sizeof(Line), F ) )
 					{
-						if( !strncmp( Line, "UIScale=", 8 ) )
-							Scale = (FLOAT)atof( Line + 8 );
+						// Trim leading whitespace.
+						char* P = Line;
+						while( *P == ' ' || *P == '\t' )
+							++P;
+						if( *P == '[' )
+						{
+							InOptionsMenu = ( strncmp( P, "[Unreal.UnrealOptionsMenu]", 26 ) == 0 );
+							continue;
+						}
+						if( InOptionsMenu && !strncmp( P, "UIScale=", 8 ) )
+							Scale = (FLOAT)atof( P + 8 );
 					}
 					fclose( F );
 				}

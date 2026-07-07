@@ -55,9 +55,11 @@ public class MainActivity extends Activity {
     }
 
     private boolean needsLegacyStoragePermission() {
-        if (Build.VERSION.SDK_INT < 23 || Build.VERSION.SDK_INT > 32) return false;
-        if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) return false;
-        return !UnrealDataPaths.hasRequiredData(UnrealDataPaths.primaryAppRoot(this));
+        // UNREAL_ANDROID_OBB_ROOT_V151: all data now lives under the app-private OBB dir and imports
+        // come in through the Storage Access Framework (granted per-URI). Neither path reads shared
+        // storage, so READ_EXTERNAL_STORAGE is never required — don't prompt for it (it was only ever
+        // needed by the old /sdcard scan, which is gone).
+        return false;
     }
 
     @Override
@@ -129,7 +131,8 @@ public class MainActivity extends Activity {
         msg.setText("No fully readable Unreal data folder was found.\n\n" +
                 "Select the 'Unreal' folder or import a ZIP file containing the Unreal data.\n\n" +
                 "The selected folder or ZIP file must contain at least:\n" +
-                "System/Core.u\nSystem/Engine.u\nSystem/Klingons.u\nMaps/*.unr" + extra);
+                "System/Core.u\nSystem/Engine.u\nSystem/Klingons.u\nMaps/*.unr\n\n" +
+                "Your existing save games from a previous install are imported automatically." + extra);
         msg.setTextSize(16);
         msg.setGravity(Gravity.CENTER);
         msg.setPadding(0, 24, 0, 24);

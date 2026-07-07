@@ -140,40 +140,48 @@ static void AndroidSetUnrealRoot( const char* Root )
 	GAndroidUnrealSaveDir[sizeof(GAndroidUnrealSaveDir) - 1] = 0;
 }
 
-static void AndroidTryUnrealRootCandidate( const char* Root )
+// UNREAL_ANDROID_OBB_ROOT_V151: derive the OBB Unreal root from the app external-files dir, i.e.
+// transform ".../Android/data/<pkg>/files" into ".../Android/obb/<pkg>/Unreal". This mirrors Java's
+// getObbDir()/Unreal without needing JNI here, and is only a fallback: normally Java hands us the
+// exact path via the UE1_ANDROID_ROOT env var.
+static void AndroidDeriveObbUnrealRoot( const char* ExternalFilesDir, char* Out, INT OutSize )
 {
-	if( GAndroidUnrealRootDir[0] || !Root || !Root[0] )
+	if( Out && OutSize > 0 )
+		Out[0] = 0;
+	if( !ExternalFilesDir || !ExternalFilesDir[0] || !Out || OutSize <= 0 )
 		return;
 
-	UE1_ANDROID_LOGI( "FS root candidate: %s", Root );
-	if( AndroidLooksLikeUnrealRoot( Root ) )
-	{
-		AndroidSetUnrealRoot( Root );
-		UE1_ANDROID_LOGI( "FS selected root: %s", GAndroidUnrealRootDir );
-	}
-}
-
-static void AndroidScanVolumeRoots( const char* Parent )
-{
-	DIR* D = opendir( Parent );
-	if( !D )
+	const char* Marker = "/Android/data/";
+	const char* Found = strstr( ExternalFilesDir, Marker );
+	if( !Found )
 		return;
 
-	for( struct dirent* E = readdir( D ); E; E = readdir( D ) )
-	{
-		if( GAndroidUnrealRootDir[0] )
-			break;
-		const char* Name = E->d_name;
-		if( !Name || !strcmp(Name, ".") || !strcmp(Name, "..") )
-			continue;
-		if( !strcmp(Name, "runtime") || !strcmp(Name, "asec") || !strcmp(Name, "obb") )
-			continue;
+	// Prefix = everything before "/Android/data/" (e.g. "/storage/emulated/0").
+	INT PrefixLen = (INT)( Found - ExternalFilesDir );
 
-		char Candidate[1024];
-		snprintf( Candidate, sizeof(Candidate), "%s/%s/Unreal", Parent, Name );
-		AndroidTryUnrealRootCandidate( Candidate );
-	}
-	closedir( D );
+	// Package = the single path component right after the marker.
+	const char* PkgStart = Found + strlen( Marker );
+	const char* PkgEnd = PkgStart;
+	while( *PkgEnd && *PkgEnd != '/' )
+		++PkgEnd;
+	INT PkgLen = (INT)( PkgEnd - PkgStart );
+	if( PkgLen <= 0 )
+		return;
+
+	char Prefix[1024];
+	if( PrefixLen >= (INT)sizeof(Prefix) )
+		PrefixLen = (INT)sizeof(Prefix) - 1;
+	memcpy( Prefix, ExternalFilesDir, PrefixLen );
+	Prefix[PrefixLen] = 0;
+
+	char Pkg[256];
+	if( PkgLen >= (INT)sizeof(Pkg) )
+		PkgLen = (INT)sizeof(Pkg) - 1;
+	memcpy( Pkg, PkgStart, PkgLen );
+	Pkg[PkgLen] = 0;
+
+	snprintf( Out, OutSize, "%s/Android/obb/%s/Unreal", Prefix, Pkg );
+	Out[OutSize - 1] = 0;
 }
 static void AndroidMakeDirsRecursive( const char* Path )
 {
@@ -244,75 +252,11 @@ static UBOOL AndroidLooksLikeIni( const char* Filename )
 	return Dot && appStricmp( Dot, ".ini" ) == 0;
 }
 
-static UBOOL AndroidCopyIfExists( const char* Src, const char* Dst )
-{
-	if( appFSize( Src ) <= 0 )
-		return false;
-
-	AndroidMakeParentDirForFile( Dst );
-	UBOOL Ok = appCopyFile( Src, Dst );
-
-	if( Ok )
-		UE1_ANDROID_LOGI( "Initialized config: %s -> %s", Src, Dst );
-	else
-		UE1_ANDROID_LOGE( "Failed to initialize config: %s -> %s", Src, Dst );
-
-	return Ok;
-}
-
-static void AndroidCreateMinimalIni( const char* Filename, const char* Text )
-{
-	if( appFSize( Filename ) >= 0 )
-		return;
-
-	AndroidMakeParentDirForFile( Filename );
-
-	FILE* F = fopen( Filename, "wb" );
-	if( F )
-	{
-		if( Text && Text[0] )
-			fwrite( Text, 1, strlen(Text), F );
-		fclose( F );
-		UE1_ANDROID_LOGW( "Created minimal config: %s", Filename );
-	}
-	else
-	{
-		UE1_ANDROID_LOGE( "Could not create minimal config: %s errno=%d %s", Filename, errno, strerror(errno) );
-	}
-}
-
-static void AndroidEnsureIniFile( const char* IniName, const char* PreferredDefault, const char* FallbackDefault, const char* MinimalText )
-{
-	char Dst[1024];
-	snprintf( Dst, sizeof(Dst), "%s%s", GAndroidUnrealSystemDir, IniName );
-	Dst[sizeof(Dst) - 1] = 0;
-
-	if( appFSize( Dst ) >= 0 )
-	{
-		UE1_ANDROID_LOGI( "Config exists: %s", Dst );
-		return;
-	}
-
-	if( PreferredDefault && PreferredDefault[0] )
-	{
-		char Src[1024];
-		snprintf( Src, sizeof(Src), "%s%s", GAndroidUnrealSystemDir, PreferredDefault );
-		Src[sizeof(Src) - 1] = 0;
-		if( AndroidCopyIfExists( Src, Dst ) )
-			return;
-	}
-
-	if( FallbackDefault && FallbackDefault[0] )
-	{
-		char Src[1024];
-		snprintf( Src, sizeof(Src), "%s%s", GAndroidUnrealSystemDir, FallbackDefault );
-		Src[sizeof(Src) - 1] = 0;
-		if( AndroidCopyIfExists( Src, Dst ) )
-			return;
-	}
-
-	AndroidCreateMinimalIni( Dst, MinimalText );
-}
+// UNREAL_ANDROID_SINGLE_INI_V151: the old AndroidCopyIfExists / AndroidCreateMinimalIni /
+// AndroidEnsureIniFile helpers were removed. Native no longer synthesizes ANY .ini file. Unreal.ini
+// is the single config file and the Java bootstrap (UnrealDataPaths) writes a complete one before
+// native init; User.ini / AndroidController.ini / AndroidUI.ini are gone. Not creating stubs here
+// also removes the ConfigNotFound trap where a bare native stub shadowed a proper config.
 CORE_API void appAndroidInitFileSystem()
 {
 	if( GAndroidFSReady )
@@ -335,29 +279,46 @@ CORE_API void appAndroidInitFileSystem()
 	GAndroidExternalFilesDir[sizeof(GAndroidExternalFilesDir) - 1] = 0;
 	AndroidEnsureTrailingSlash( GAndroidExternalFilesDir, sizeof(GAndroidExternalFilesDir) );
 
+	// UNREAL_ANDROID_OBB_ROOT_V151: the data root is ALWAYS the app OBB dir
+	// (Android/obb/<pkg>/Unreal). The Java launcher hands us the exact path via UE1_ANDROID_ROOT
+	// (it uses getObbDir()); if that is somehow unset we derive the same path from the app
+	// external-files dir. We force-set the root UNCONDITIONALLY — not gated on data being present —
+	// so the native engine and the Java config bootstrap always agree on ONE root. The old scan of
+	// /sdcard/Unreal and every /storage and /mnt volume was removed: it made the root
+	// nondeterministic ("randomly on the SD card") and could select a different root than the one
+	// Java wrote the config into, booting straight into Core.Errors.ConfigNotFound /
+	// Engine.Errors.LoadEntry.
+	char ObbRoot[1024];
+	ObbRoot[0] = 0;
 	const char* EnvRoot = getenv( "UE1_ANDROID_ROOT" );
 	if( EnvRoot && EnvRoot[0] )
-		AndroidTryUnrealRootCandidate( EnvRoot );
-
-	char AppSpecific[1024];
-	snprintf( AppSpecific, sizeof(AppSpecific), "%sUnreal", GAndroidExternalFilesDir );
-	AndroidTryUnrealRootCandidate( AppSpecific );
-
-	AndroidTryUnrealRootCandidate( "/storage/emulated/0/Unreal" );
-	AndroidTryUnrealRootCandidate( "/sdcard/Unreal" );
-	AndroidTryUnrealRootCandidate( "/storage/sdcard0/Unreal" );
-	AndroidTryUnrealRootCandidate( "/mnt/sdcard/Unreal" );
-	AndroidTryUnrealRootCandidate( "/mnt/usbdrive/Unreal" );
-	AndroidTryUnrealRootCandidate( "/mnt/usbdrive0/Unreal" );
-	AndroidTryUnrealRootCandidate( "/mnt/usb_storage/Unreal" );
-	AndroidScanVolumeRoots( "/storage" );
-	AndroidScanVolumeRoots( "/mnt" );
-
-	if( !GAndroidUnrealRootDir[0] )
 	{
-		// Last-resort fallback: preserve old writable app-specific behaviour.
-		AndroidSetUnrealRoot( AppSpecific );
+		appStrncpy( ObbRoot, EnvRoot, sizeof(ObbRoot) - 1 );
+		ObbRoot[sizeof(ObbRoot) - 1] = 0;
+		UE1_ANDROID_LOGI( "FS root from UE1_ANDROID_ROOT: %s", ObbRoot );
 	}
+	else
+	{
+		AndroidDeriveObbUnrealRoot( GAndroidExternalFilesDir, ObbRoot, sizeof(ObbRoot) );
+		if( ObbRoot[0] )
+			UE1_ANDROID_LOGI( "FS root derived from OBB: %s", ObbRoot );
+	}
+
+	if( ObbRoot[0] )
+	{
+		AndroidSetUnrealRoot( ObbRoot );
+	}
+	else
+	{
+		// Absolute last resort so we never boot with an empty root: the app-specific writable dir.
+		char AppSpecific[1024];
+		snprintf( AppSpecific, sizeof(AppSpecific), "%sUnreal", GAndroidExternalFilesDir );
+		AndroidSetUnrealRoot( AppSpecific );
+		UE1_ANDROID_LOGW( "FS root fell back to app-specific dir: %s", GAndroidUnrealRootDir );
+	}
+
+	if( !AndroidLooksLikeUnrealRoot( GAndroidUnrealRootDir ) )
+		UE1_ANDROID_LOGW( "FS root has no readable game data yet: %s (import required)", GAndroidUnrealRootDir );
 
 	AndroidMakeDirsRecursive( GAndroidUnrealRootDir );
 	AndroidMakeDirsRecursive( GAndroidUnrealSystemDir );
@@ -368,10 +329,21 @@ CORE_API void appAndroidInitFileSystem()
 	UE1_ANDROID_LOGI( "Unreal system dir:  %s", GAndroidUnrealSystemDir );
 	UE1_ANDROID_LOGI( "Unreal save dir:    %s", GAndroidUnrealSaveDir );
 
-	AndroidEnsureIniFile( "Unreal.ini", "Default.ini", NULL,
-		"; Created by UE1 Android port\r\n\r\n" );
-	AndroidEnsureIniFile( "User.ini", "DefUser.ini", "DefaultUser.ini",
-		"[DefaultPlayer]\r\nName=Player\r\nClass=Klingons.DMMale\r\n\r\n[Engine.Input]\r\n\r\n" );
+	// UNREAL_ANDROID_OBB_ROOT_V151 / config hardening: do NOT synthesize a Unreal.ini here. The Java
+	// bootstrap (UnrealDataPaths.ensureWritableConfigFiles) writes a COMPLETE config into this exact
+	// root before native init. A native-created stub would be missing [Core.System] Paths, the [URL]
+	// fields, and the [Engine.Engine] class keys — which boots straight into
+	// Core.Errors.ConfigNotFound / Engine.Errors.LoadEntry. If it is missing here, log it loudly
+	// instead of masking the real problem with an unusable stub.
+	{
+		char UnrealIniPath[1024];
+		snprintf( UnrealIniPath, sizeof(UnrealIniPath), "%sUnreal.ini", GAndroidUnrealSystemDir );
+		UnrealIniPath[sizeof(UnrealIniPath) - 1] = 0;
+		if( appFSize( UnrealIniPath ) <= 0 )
+			UE1_ANDROID_LOGE( "Unreal.ini missing/empty at engine root: %s (Java config bootstrap did not run for this root)", UnrealIniPath );
+		else
+			UE1_ANDROID_LOGI( "Config present: %s", UnrealIniPath );
+	}
 
 	setenv( "UE1_ANDROID_ROOT", GAndroidUnrealRootDir, 1 );
 	setenv( "HOME", GAndroidUnrealRootDir, 1 );
