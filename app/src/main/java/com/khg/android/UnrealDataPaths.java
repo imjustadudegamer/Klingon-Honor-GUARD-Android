@@ -359,6 +359,34 @@ final class UnrealDataPaths {
         }
     }
 
+    // UNREAL_ANDROID_DIFFICULTY_RESET_V095: the port historically shipped [Engine.GameInfo] Difficulty=3
+    // (the hardest of four levels, inherited from a played-on-hard retail Unreal.ini). Difficulty is a
+    // globalconfig byte, so it persists in Unreal.ini and is NOT stored per save. This does a ONE-TIME reset
+    // to Normal (1) when a device first launches this release, so anyone stuck on the inherited hard default
+    // is moved off it. It runs exactly once (guarded by an app-private flag), so it never fights a player's
+    // own in-game difficulty choice on later launches. Fresh installs already ship Difficulty=1, so this is
+    // a no-op for them beyond setting the flag.
+    private static void oneTimeDifficultyResetV095(Context context, File systemDir) {
+        try {
+            if (context == null || systemDir == null) return;
+            android.content.SharedPreferences prefs = context.getSharedPreferences("khg_bootstrap", Context.MODE_PRIVATE);
+            final String KEY = "difficultyResetV095Done";
+            if (prefs.getBoolean(KEY, false)) return; // already done on this install
+            File ini = new File(systemDir, "Unreal.ini");
+            if (ini.isFile()) {
+                String text = new String(Files.readAllBytes(ini.toPath()), StandardCharsets.UTF_8);
+                String updated = setIniValue(text, "Engine.GameInfo", "Difficulty", "1");
+                if (!updated.equals(text)) {
+                    Files.write(ini.toPath(), updated.getBytes(StandardCharsets.UTF_8));
+                    Log.i(TAG_CONFIG, "One-time difficulty reset to Normal (1): " + ini.getAbsolutePath());
+                }
+            }
+            prefs.edit().putBoolean(KEY, true).apply();
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "One-time difficulty reset failed: " + t);
+        }
+    }
+
     private static byte[] readAllBytes(InputStream in) throws IOException {
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         byte[] buf = new byte[16 * 1024];
@@ -445,6 +473,7 @@ final class UnrealDataPaths {
             ensureConfigFile(systemDir, "Unreal.ini", new String[] { "Unreal.ini.default" }, "");
             ensureAndroidControllerDirectPatch(systemDir);
             removeObsoleteStrayInis(systemDir);
+            oneTimeDifficultyResetV095(context, systemDir);
             reconstructSaveSlots(root);
             Log.i(TAG_CONFIG, "Config root: " + root.getAbsolutePath());
             Log.i(TAG_CONFIG, "Config file: " + new File(systemDir, "Unreal.ini").getAbsolutePath());
