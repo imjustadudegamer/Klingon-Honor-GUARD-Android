@@ -90,7 +90,7 @@ set(USE_SDL ON CACHE BOOL "" FORCE)
 set(BUILD_EDITOR OFF CACHE BOOL "" FORCE)
 set(BUILD_SOFTDRV OFF CACHE BOOL "" FORCE)
 set(BUILD_NOPENGLDRV OFF CACHE BOOL "" FORCE)
-set(BUILD_NOPENGLESDRV ON CACHE BOOL "" FORCE)
+set(BUILD_NOPENGLESDRV OFF CACHE BOOL "" FORCE)   # [KHG] GLES renderer removed — Vulkan-only on Android
 set(BUILD_VULKANDRV ON CACHE BOOL "" FORCE)   # [KHG] Vulkan device alongside GLES (GLES kept as fallback)
 set(BUILD_NULLSOUNDDRV ON CACHE BOOL "" FORCE)
 set(BUILD_NOPENALDRV ON CACHE BOOL "" FORCE)
@@ -144,9 +144,6 @@ add_subdirectory("${UE1_ROOT}/Source" "${CMAKE_BINARY_DIR}/UE1")
 # Android system libraries needed by the final shared object and some static UE1 modules.
 if(TARGET Unreal)
     target_link_libraries(Unreal android log GLESv2 EGL)
-endif()
-if(TARGET NOpenGLESDrv)
-    target_link_libraries(NOpenGLESDrv GLESv2 EGL android log)
 endif()
 if(TARGET NSDLDrv)
     # GLESv2/EGL + FFmpeg for the FMV player (FMVPlayer.cpp).

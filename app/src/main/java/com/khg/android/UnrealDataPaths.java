@@ -360,6 +360,8 @@ final class UnrealDataPaths {
             // seeded anymore (the engine never loads it).
             ensureConfigFile(systemDir, "Unreal.ini", new String[] { "Unreal.ini.default" }, "");
             ensureAndroidControllerDirectPatch(systemDir);
+            removeObsoleteStrayInis(systemDir);
+            reconstructSaveSlots(root);
             Log.i(TAG_CONFIG, "Config root: " + root.getAbsolutePath());
             Log.i(TAG_CONFIG, "Config file: " + new File(systemDir, "Unreal.ini").getAbsolutePath());
         } catch (Throwable t) {
@@ -448,25 +450,6 @@ final class UnrealDataPaths {
             }
         } catch (IOException ex) {
             Log.w(TAG_CONFIG, "Could not ensure input bindings in " + file.getAbsolutePath() + ": " + ex);
-        }
-    }
-
-    // UNREAL_ANDROID_MENU_KEY_BINDING_V144: bind Escape -> ShowMenu so the in-game menu opens (from the
-    // hardware Back key, a gamepad Start, or the on-screen MENU button, all of which deliver IK_Escape).
-    // The stock KHG config binds this, but the port's minimal [Engine.Input] set omitted it, so ESC did
-    // nothing and "PRESS ESC TO BEGIN" / the menu were unreachable. Set-if-absent so a user rebind wins.
-    private static void ensureMenuKeyBinding(File file) {
-        if (file == null || !file.isFile()) return;
-        try {
-            String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-            String p = setIniValueIfAbsent(text, "Engine.Input", "Escape", "ShowMenu");
-            p = setIniValueIfAbsent(p, "Engine.Input", "Enter", "InventoryActivate");
-            if (!p.equals(text)) {
-                Files.write(file.toPath(), p.getBytes(StandardCharsets.UTF_8));
-                Log.i(TAG_CONFIG, "Ensured Escape=ShowMenu binding: " + file.getAbsolutePath());
-            }
-        } catch (IOException ex) {
-            Log.w(TAG_CONFIG, "Could not ensure menu key binding in " + file.getAbsolutePath() + ": " + ex);
         }
     }
 
@@ -572,96 +555,6 @@ final class UnrealDataPaths {
         }
     }
 
-    private static void appendControllerInputFallbacks(File file) {
-        if (file == null) return;
-        try {
-            String text = file.isFile()
-                    ? new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)
-                    : "[DefaultPlayer]\nName=Player\nClass=UnrealShare.MaleOne\n\n";
-            if (text.contains("UNREAL_ANDROID_CONTROLLER_DIRECT_V122")
-                    || hasAnyEngineInputBindings(text)
-                    || hasAndroidControllerFallbackBindings(text)) {
-                Log.i(TAG_CONFIG, "Preserved existing input bindings: " + file.getAbsolutePath()); // UNREAL_ANDROID_CONFIG_PRESERVE_V139
-                return;
-            }
-            String block = "\n\n; UNREAL_ANDROID_CONTROLLER_DIRECT_V122 UNREAL_ANDROID_CONFIG_PRESERVE_V139\n" +
-                    "; Robust Android controller fallbacks. Direct mode uses W/A/S/D + mouse buttons for gameplay,\n" +
-                    "; while these Joy*/friendly aliases keep Customize Controls and SDL fallback usable.\n" +
-                    "[Engine.Input]\n" +
-                    "LeftMouse=Fire\n" +
-                    "RightMouse=AltFire\n" +
-                    "MouseX=Axis aMouseX Speed=6.0\n" +
-                    "MouseY=Axis aMouseY Speed=6.0\n" +
-                    "W=MoveForward\n" +
-                    "S=MoveBackward\n" +
-                    "A=StrafeLeft\n" +
-                    "D=StrafeRight\n" +
-                    "Space=Jump\n" +
-                    "C=Duck\n" +
-                    "G=Grab\n" +
-                    "Joy1=Jump\n" +
-                    "Joy2=Duck\n" +
-                    "Joy3=Grab\n" +
-                    "Joy4=Walking\n" +
-                    "Joy5=ActivateTranslator\n" +
-                    "Joy8=Duck\n" +
-                    "Joy9=CenterView\n" +
-                    "Joy10=PrevWeapon\n" +
-                    "Joy11=NextWeapon\n" +
-                    "Joy12=AltFire\n" +
-                    "Joy13=Fire\n" +
-                    "Joy14=TurnLeft\n" +
-                    "Joy15=TurnRight\n" +
-                    "Joy16=LookUp\n" +
-                    "JoyX=Axis aStrafe Speed=1\n" +
-                    "JoyY=Axis aBaseY Speed=1\n" +
-                    "JoyU=Axis aTurn Speed=1\n" +
-                    "JoyV=Axis aLookUp Speed=-1\n" +
-                    "JoyPovRight=NextWeapon\n" +
-                    "JoyPovLeft=PrevWeapon\n" +
-                    "JoyPovUp=InventoryPrevious\n" +
-                    "JoyPovDown=InventoryNext\n" +
-                    "UnknownD8=StrafeLeft\n" +
-                    "UnknownD9=StrafeRight\n" +
-                    "UnknownDA=MoveForward\n" +
-                    "UnknownDF=MoveBackward\n" +
-                    "UnknownEA=LookDown\n";
-            Files.write(file.toPath(), (text + block).getBytes(StandardCharsets.UTF_8));
-            Log.i(TAG_CONFIG, "Appended Android controller input fallbacks: " + file.getAbsolutePath());
-        } catch (IOException ex) {
-            Log.w(TAG_CONFIG, "Could not append controller input fallbacks in " + file.getAbsolutePath() + ": " + ex);
-        }
-    }
-
-    private static boolean hasAnyEngineInputBindings(String text) {
-        // UNREAL_ANDROID_CONFIG_PRESERVE_V139
-        // A retained install may already contain user-customized controls.  Do not
-        // append a second default [Engine.Input] block because UE1 keeps the last
-        // duplicate key and that would effectively reset the user's bindings.
-        if (text == null) return false;
-        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n");
-        boolean inInput = false;
-        for (String raw : lines) {
-            String t = raw.trim();
-            if (t.length() == 0 || t.startsWith(";") || t.startsWith("#")) continue;
-            if (t.startsWith("[") && t.endsWith("]")) {
-                inInput = t.equalsIgnoreCase("[Engine.Input]");
-                continue;
-            }
-            if (inInput && t.indexOf('=') > 0) return true;
-        }
-        return false;
-    }
-
-    private static boolean hasAndroidControllerFallbackBindings(String text) {
-        // UNREAL_ANDROID_CONFIG_PRESERVE_V139
-        if (text == null) return false;
-        return text.contains("UnknownD8=StrafeLeft")
-                || text.contains("UnknownDA=MoveForward")
-                || text.contains("Joy11=NextWeapon")
-                || text.contains("Joy13=Fire");
-    }
-
     private static String setIniValue(String text, String section, String key, String value) {
         if (text == null) text = "";
         String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
@@ -742,6 +635,85 @@ final class UnrealDataPaths {
         if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("Could not create " + parent.getAbsolutePath());
         try (FileInputStream in = new FileInputStream(src); FileOutputStream out = new FileOutputStream(dst)) {
             copyStream(in, out);
+        }
+    }
+
+    // UNREAL_ANDROID_SINGLE_INI_CLEANUP_V152: Unreal.ini is the ONE and ONLY config file (V151). Older
+    // builds shipped/synthesized AndroidController.ini (pure comments, read by nothing) and AndroidUI.ini
+    // (its only key, UIScale, is now read from Unreal.ini's [Unreal.UnrealOptionsMenu]); User.ini/Default.ini
+    // were inert stubs the engine never loads for game config. They can linger in System/ from a pre-V151
+    // install. Delete these known-obsolete stray .ini files so the layout matches the single-ini design and
+    // nothing stale can ever be read. Unreal.ini is never touched. Verified unused: no native/Java runtime
+    // reader references any of these (UnCanvas.cpp:48 reads UIScale from Unreal.ini).
+    private static final String[] OBSOLETE_STRAY_INIS = { "AndroidController.ini", "AndroidUI.ini", "User.ini", "Default.ini" };
+    private static void removeObsoleteStrayInis(File systemDir) {
+        if (systemDir == null || !systemDir.isDirectory()) return;
+        for (String name : OBSOLETE_STRAY_INIS) {
+            try {
+                File stray = findCaseInsensitive(systemDir, name);
+                if (stray != null && stray.isFile() && stray.delete())
+                    Log.i(TAG_CONFIG, "Removed obsolete stray ini: " + stray.getAbsolutePath());
+            } catch (Throwable t) {
+                Log.w(TAG_CONFIG, "Could not remove stray ini " + name + ": " + t);
+            }
+        }
+    }
+
+    // Read a single ini value; returns null when the section or key is absent.
+    private static String getIniValue(String text, String section, String key) {
+        if (text == null) return null;
+        String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
+        java.util.regex.Matcher sectionMatcher = java.util.regex.Pattern
+                .compile("(?im)^\\[" + java.util.regex.Pattern.quote(section) + "\\]\\s*$").matcher(normalized);
+        if (!sectionMatcher.find()) return null;
+        int sectionStart = sectionMatcher.end();
+        java.util.regex.Matcher nextSection = java.util.regex.Pattern.compile("(?m)^\\[[^\\]]+\\]\\s*$").matcher(normalized);
+        int sectionEnd = nextSection.find(sectionStart) ? nextSection.start() : normalized.length();
+        String body = normalized.substring(sectionStart, sectionEnd);
+        java.util.regex.Matcher keyMatcher = java.util.regex.Pattern
+                .compile("(?im)^" + java.util.regex.Pattern.quote(key) + "\\s*=(.*)$").matcher(body);
+        return keyMatcher.find() ? keyMatcher.group(1).trim() : null;
+    }
+
+    // UNREAL_ANDROID_SAVE_SLOT_RECONSTRUCT_V152: KHG stores the load-menu save-slot labels as a
+    // globalconfig array — [Klingons.KlingonMenuSlot] SlotNames[0..8] in Unreal.ini — NOT by scanning
+    // the Save/ directory. So the menu lists a slot only if its config label is non-empty. Any event
+    // that resets the config (the shipped Unreal.ini ships every SlotNames[k]=..Empty.., a reinstall, a
+    // manual ini delete, or the V151 OBB save auto-import which copies *.usa but carries no config) leaves
+    // the Save<k>.usa files physically present but UNLISTABLE — the player sees an empty Load menu even
+    // though their saves are intact. Reliability fix: every launch, for each Save<k>.usa that exists, if
+    // its SlotNames[k] is missing/blank/"..Empty..", seed a non-empty label (from the file's mtime) so the
+    // slot lists and loads (?load=k). Purely additive — a real label written by the game is never touched,
+    // and no save file is read or modified. k is a single digit 0-8: KHG hub sub-level saves are
+    // Save<k><i>.usa (two digits) and are correctly ignored as non-slot files.
+    private static void reconstructSaveSlots(File root) {
+        try {
+            if (root == null) return;
+            File iniFile = new File(root, "System/Unreal.ini");
+            if (!iniFile.isFile()) return;
+            File saveDir = new File(root, "Save");
+            if (!saveDir.isDirectory()) return;
+
+            String text = new String(Files.readAllBytes(iniFile.toPath()), StandardCharsets.UTF_8);
+            String updated = text;
+            int recovered = 0;
+            java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("MM/dd/yy HH:mm", Locale.US);
+            for (int k = 0; k <= 8; k++) {
+                File save = new File(saveDir, "Save" + k + ".usa");
+                if (!save.isFile()) continue;
+                String cur = getIniValue(updated, "Klingons.KlingonMenuSlot", "SlotNames[" + k + "]");
+                boolean empty = cur == null || cur.isEmpty() || cur.equalsIgnoreCase("..Empty..");
+                if (!empty) continue; // a real label from the game — leave it alone
+                String label = "Saved Game " + fmt.format(new java.util.Date(save.lastModified()));
+                updated = setIniValue(updated, "Klingons.KlingonMenuSlot", "SlotNames[" + k + "]", label);
+                recovered++;
+            }
+            if (!updated.equals(text)) {
+                Files.write(iniFile.toPath(), updated.getBytes(StandardCharsets.UTF_8));
+                Log.i(TAG_CONFIG, "Reconstructed " + recovered + " save-slot label(s) from Save/*.usa: " + iniFile.getAbsolutePath());
+            }
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "Could not reconstruct save-slot labels: " + t);
         }
     }
 
@@ -1050,11 +1022,5 @@ final class UnrealDataPaths {
         while (s.contains("//")) s = s.replace("//", "/");
         if (s.contains("../") || s.equals("..")) return "";
         return s;
-    }
-
-    static String candidateDescription(Context context) {
-        StringBuilder b = new StringBuilder();
-        for (File candidate : candidateRoots(context)) b.append("\n- ").append(candidate.getAbsolutePath());
-        return b.toString();
     }
 }

@@ -30,11 +30,6 @@ public class MainActivity extends Activity {
     private File selectedRoot;
     private String lastImportMessage;
 
-    private File unrealRoot() {
-        if (selectedRoot == null) selectedRoot = UnrealDataPaths.findBestUnrealRoot(this);
-        return selectedRoot;
-    }
-
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);

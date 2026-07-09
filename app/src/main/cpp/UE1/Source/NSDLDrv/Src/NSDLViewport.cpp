@@ -89,7 +89,6 @@ static INT GAndroidTouchDirectNextKeyV136 = IK_None; // UNREAL_ANDROID_TOUCH_BUT
 static FString GAndroidTouchDirectNextSavedBindingV139; // UNREAL_ANDROID_TOUCH_NEXT_SEMANTIC_V139
 static UBOOL GAndroidTouchDirectNextHasSavedBindingV139 = 0; // UNREAL_ANDROID_TOUCH_NEXT_SEMANTIC_V139
 static UBOOL GAndroidNativeDirectResetPending = 0; // UNREAL_ANDROID_CONTROLLER_DIRECT_V122
-static volatile INT GAndroidTouchMenuVisibleV124 = 0; // UNREAL_ANDROID_TOUCH_OVERLAY_V125
 static FLOAT GAndroidTouchLookXV124 = 0.0f; // UNREAL_ANDROID_TOUCH_OVERLAY_V125 / UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131
 static FLOAT GAndroidTouchLookYV124 = 0.0f; // UNREAL_ANDROID_TOUCH_OVERLAY_V125 / UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131
 static FLOAT GAndroidTouchLookNextLogV131 = 0.0f; // UNREAL_ANDROID_TOUCH_RIGHT_LOOK_NATIVE_V131 / UNREAL_ANDROID_TOUCH_STICKS_RESTORE_V132
@@ -451,21 +450,6 @@ static UBOOL UE1AndroidNativeBindingStartsWithAliasV96( const char* Binding, con
 	return Binding[Len] == 0 || Binding[Len] == ' ' || Binding[Len] == '|' || Binding[Len] == '\t';
 }
 
-static UBOOL UE1AndroidNativeBindingIsAnalogAxisAliasV96( const char* Binding )
-{
-	// Directional friendly stick keys such as RJoyLeft should not behave like
-	// keyboard keys for movement/look aliases.  Keyboard-style Press/Hold makes
-	// them instantly full speed.  These aliases are therefore driven as analogue
-	// IST_Axis events below.
-	return UE1AndroidNativeBindingStartsWithAliasV96( Binding, "MoveForward" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "MoveBackward" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "TurnLeft" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "TurnRight" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "StrafeLeft" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "StrafeRight" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "LookUp" )
-		|| UE1AndroidNativeBindingStartsWithAliasV96( Binding, "LookDown" );
-}
 
 static UBOOL UE1AndroidNativeBindingIsRightStickLookAliasV119( const char* Binding )
 {
@@ -566,23 +550,6 @@ static SWORD UE1AndroidNativeTriggerToAxis( FLOAT A, FLOAT B, FLOAT Deadzone )
 	return (SWORD)Clamp( (INT)( Filtered * 32767.0f ), 0, 32767 );
 }
 
-static UBOOL UE1AndroidNativeMotionIsNeutralForKeyCaptureV90( const FAndroidNativeControllerEvent& Event )
-{
-	// While entering Customize Controls, Android may still deliver the DPad/stick
-	// motion that was used to navigate/confirm the row. Do not arm axis/hat capture
-	// until every analogue source is back in a small neutral zone.
-	const FLOAT Threshold = 0.25f;
-	return Abs(Event.AxisX) < Threshold
-		&& Abs(Event.AxisY) < Threshold
-		&& Abs(Event.AxisZ) < Threshold
-		&& Abs(Event.AxisRZ) < Threshold
-		&& Abs(Event.AxisLTrigger) < Threshold
-		&& Abs(Event.AxisRTrigger) < Threshold
-		&& Abs(Event.AxisBrake) < Threshold
-		&& Abs(Event.AxisGas) < Threshold
-		&& Abs(Event.AxisHatX) < Threshold
-		&& Abs(Event.AxisHatY) < Threshold;
-}
 
 extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nativeAndroidControllerIsEnabled( JNIEnv*, jclass )
 {
@@ -665,11 +632,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_khg_android_UnrealSDLActivity_nativeA
 	UE1AndroidNativeControllerResetState(); // ANDROID_CONTROLLER_NATIVE_RESET_V92
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_com_khg_android_UnrealSDLActivity_nativeAndroidIsMenuV124( JNIEnv*, jclass )
-{
-	// UNREAL_ANDROID_TOUCH_OVERLAY_V125
-	return GAndroidTouchMenuVisibleV124 ? JNI_TRUE : JNI_FALSE;
-}
 
 extern "C" int UE1FMVIsActive( void ); // FMVPlayer.cpp — nonzero while a cutscene/FMV is on screen
 
@@ -794,9 +756,6 @@ static FLOAT UE1AndroidGetConfiguredGammaModeValue()
 
 	char Value[64];
 	if( GConfigCache.GetString( "NSDLDrv.NSDLClient", "Gamma", Value, sizeof(Value) ) )
-		return Clamp( appAtof( Value ), 0.5f, 3.0f );
-
-	if( GConfigCache.GetString( "NOpenGLESDrv.NOpenGLESRenderDevice", "WorldGamma", Value, sizeof(Value) ) )
 		return Clamp( appAtof( Value ), 0.5f, 3.0f );
 
 	return 1.0f;
@@ -1036,10 +995,8 @@ static void UE1AndroidToggleGammaMode( UNSDLViewport* Viewport, FOutputDevice* O
 	char NewValue[32];
 	appSprintf( NewValue, "%.2f", NewMode.Value );
 
-	// NSDLDrv.NSDLClient/Gamma is the runtime value read by the Android GLES renderer.
-	// Mirroring to WorldGamma keeps the renderer section readable and avoids stale advanced config values.
+	// NSDLDrv.NSDLClient/Gamma is the single runtime gamma store (VulkanDrv applies it via the Glide ramp).
 	GConfigCache.SetString( "NSDLDrv.NSDLClient", "Gamma", NewValue );
-	GConfigCache.SetString( "NOpenGLESDrv.NOpenGLESRenderDevice", "WorldGamma", NewValue );
 	GConfigCache.SaveAllConfigs();
 	UE1AndroidRefreshGammaMenuLabel();
 
@@ -1638,11 +1595,6 @@ static void AndroidRequestSoftKeyboard( UNSDLViewport* Viewport, FLOAT KeepAlive
 	AndroidKickSoftKeyboard( Viewport, KeepAliveSeconds, 1 );
 }
 
-static void AndroidShowSoftKeyboard( UNSDLViewport* Viewport, FLOAT KeepAliveSeconds )
-{
-	// Compatibility wrapper for older patch hooks.
-	AndroidRequestSoftKeyboard( Viewport, KeepAliveSeconds );
-}
 
 static void AndroidHideSoftKeyboard()
 {
@@ -2085,7 +2037,7 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 
 #ifdef PLATFORM_ANDROID // UNREAL_ANDROID_PRECREATE_DISPLAY_SIZE
 		// Native follows the real Android drawable. Fixed entries keep their logical
-		// render size and are fullscreen-scaled by NOpenGLESDrv.
+		// render size and are fullscreen-scaled by the VulkanDrv present pass.
 		// UE1_ANDROID_RESOLUTION_MENU_NATIVE_FIXED_CLEAN_V85
 		if( !UE1AndroidIsFixedMenuResolution( NewX, NewY ) && Client->AndroidResolutionMode == 0 )
 		{
@@ -2394,7 +2346,7 @@ void UNSDLViewport::SetClientSize( INT NewX, INT NewY, UBOOL UpdateProfile )
 #endif
 #ifdef PLATFORM_ANDROID // UNREAL_ANDROID_SETCLIENT_DRAWABLE_SIZE
 		// Native follows the drawable; fixed menu resolutions keep their logical
-		// SizeX/SizeY and are expanded to the surface by NOpenGLESDrv.
+		// SizeX/SizeY and are expanded to the surface by the VulkanDrv present pass.
 		// UE1_ANDROID_RESOLUTION_MENU_NATIVE_FIXED_CLEAN_V85
 		UE1AndroidApplyConfiguredResolution( Client, hWnd, GLCtx, NewX, NewY );
 #endif
@@ -2673,22 +2625,11 @@ UBOOL UNSDLViewport::TickInput()
 		((UObject*)Console)->GetMainFrame() &&
 		((UObject*)Console)->GetMainFrame()->StateNode &&
 		((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "KeyMenuing";
-	const UBOOL bAndroidTouchAnyMenuV124 = Console &&
-		((UObject*)Console)->GetMainFrame() &&
-		((UObject*)Console)->GetMainFrame()->StateNode &&
-		(
-			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "Menuing" ||
-			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "KeyMenuing" ||
-			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "MenuTyping" ||
-			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "Typing" ||
-			((UObject*)Console)->GetMainFrame()->StateNode->GetFName() == "Console"
-		);
-	GAndroidTouchMenuVisibleV124 = bAndroidTouchAnyMenuV124 ? 1 : 0; // UNREAL_ANDROID_TOUCH_OVERLAY_V125
 	// UNREAL_ANDROID_TOUCH_LCARS_V142: STRICT navigable-menu flag for the touch overlay.
-	// The broad flag above also covers the "Console" state, which KHG's UWindow console
-	// holds during normal gameplay — using it would wrongly put the overlay in menu mode
-	// (stick->nav, FIRE->confirm) and suppress the in-game auto-fade. This flag is true
-	// only for the actual arrow-navigable menu, matching the native bIsInUI key mapping.
+	// True only for the actual arrow-navigable menu ("Menuing"), matching the native bIsInUI
+	// key mapping. Deliberately NOT a broad set that also covers "Console": KHG's UWindow
+	// console holds the "Console" state during normal gameplay, so a broad flag would wrongly
+	// put the overlay in menu mode (stick->nav, FIRE->confirm) and suppress the in-game auto-fade.
 	GAndroidUiMenuingV142 = ( Console &&
 		((UObject*)Console)->GetMainFrame() &&
 		((UObject*)Console)->GetMainFrame()->StateNode &&

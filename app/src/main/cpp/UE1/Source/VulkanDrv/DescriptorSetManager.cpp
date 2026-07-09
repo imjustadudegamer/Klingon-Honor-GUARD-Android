@@ -25,13 +25,13 @@ void DescriptorSetManager::ClearCache()
 
 int DescriptorSetManager::GetTextureArrayIndex(DWORD PolyFlags, CachedTexture* tex, bool clamp)
 {
-	if (Textures.NextBindlessIndex == MaxBindlessTextures)
+	if (Textures.NextBindlessIndex >= BindlessCount)
 	{
 		static bool firstCall = true;
 		if (firstCall)
 		{
 			debugf("============================================================================");
-			debugf("VulkanDrv encountered more than %d textures!!!", MaxBindlessTextures);
+			debugf("VulkanDrv encountered more than %d textures!!!", BindlessCount);
 			debugf("============================================================================");
 			firstCall = false;
 		}
@@ -72,24 +72,59 @@ void DescriptorSetManager::UpdateBindlessSet()
 
 void DescriptorSetManager::CreateBindlessTextureSet()
 {
+	// [KHG Mali fix — Adreno-safe, no-op there] A March-2021 Mali Bifrost DDK (r32p1, seen on Redmi 13 /
+	// Helio G91 / Mali-G52) SIGSEGVs here inside BringUpVulkan. Two ways this can be invalid usage that an
+	// old driver faults on instead of erroring cleanly:
+	//   (a) we set the UPDATE_AFTER_BIND flags even when descriptorBindingSampledImageUpdateAfterBind was
+	//       NOT enabled at vkCreateDevice (the old bindless check never verified that feature), and
+	//   (b) the array is a fixed 16536, which may exceed the device's UpdateAfterBind sampled-image limit.
+	// Adreno reports the feature true and limits in the millions, so both guards below leave the Adreno
+	// path byte-identical (BindlessCount stays 16536, UAB flags stay on). On a device that lacks/limits
+	// UAB we build a legal, correctly-sized set instead of crashing.
+	const auto& DIe = renderer->Device->EnabledFeatures.DescriptorIndexing;
+	const auto& DIp = renderer->Device->PhysicalDevice.Properties.DescriptorIndexing;
+	const auto& Lim = renderer->Device->PhysicalDevice.Properties.Properties.limits;
+
+	bool useUAB = (DIe.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE);
+
+	uint32_t devLimit = useUAB
+		? (DIp.maxPerStageDescriptorUpdateAfterBindSampledImages < DIp.maxDescriptorSetUpdateAfterBindSampledImages
+			? DIp.maxPerStageDescriptorUpdateAfterBindSampledImages : DIp.maxDescriptorSetUpdateAfterBindSampledImages)
+		: Lim.maxPerStageDescriptorSampledImages;
+	if (devLimit == 0) devLimit = 1;
+	if (devLimit > 8) devLimit -= 8;   // headroom: samplers/other bindings share this budget on some GPUs
+	BindlessCount = (devLimit < (uint32_t)MaxBindlessTextures) ? (int)devLimit : MaxBindlessTextures;
+	if (BindlessCount < 1) BindlessCount = 1;
+
+	VkDescriptorPoolCreateFlags poolFlags = useUAB ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT : 0;
+	VkDescriptorSetLayoutCreateFlags layoutFlags = useUAB ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT : 0;
+	VkDescriptorBindingFlags bindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT | VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT;
+	if (useUAB) bindingFlags |= VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT;
+
+	debugf(NAME_Log, "[KHGBoot] bindless: useUAB=%d effectiveCount=%d (ceiling %d, devLimit %u)", (int)useUAB, BindlessCount, (int)MaxBindlessTextures, devLimit);
+
+	debugf(NAME_Log, "[KHGBoot] bindless step A: create pool");
 	Textures.BindlessPool = DescriptorPoolBuilder()
-		.Flags(VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT)
-		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxBindlessTextures)
-		.MaxSets(MaxBindlessTextures)
+		.Flags(poolFlags)
+		.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, BindlessCount)
+		.MaxSets(BindlessCount)
 		.DebugName("TextureBindlessPool")
 		.Create(renderer->Device.get());
 
+	debugf(NAME_Log, "[KHGBoot] bindless step B: create layout");
 	Textures.BindlessLayout = DescriptorSetLayoutBuilder()
-		.Flags(VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT)
+		.Flags(layoutFlags)
 		.AddBinding(
 			0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			MaxBindlessTextures,
+			BindlessCount,
 			VK_SHADER_STAGE_FRAGMENT_BIT,
-			VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT | VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT)
+			bindingFlags)
 		.DebugName("TextureBindlessLayout")
 		.Create(renderer->Device.get());
 
-	Textures.BindlessSet = Textures.BindlessPool->allocate(Textures.BindlessLayout.get(), MaxBindlessTextures);
+	debugf(NAME_Log, "[KHGBoot] bindless step C: allocate set (variable count %d)", BindlessCount);
+	Textures.BindlessSet = Textures.BindlessPool->allocate(Textures.BindlessLayout.get(), (uint32_t)BindlessCount);
+	debugf(NAME_Log, "[KHGBoot] bindless: OK");
 }
 
 void DescriptorSetManager::CreatePresentLayout()

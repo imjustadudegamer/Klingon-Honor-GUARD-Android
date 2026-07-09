@@ -52,7 +52,7 @@ public:
 
 	void ClearCache();
 
-	bool IsTextureArrayFull() const { return Textures.NextBindlessIndex + 4 > MaxBindlessTextures; }
+	bool IsTextureArrayFull() const { return Textures.NextBindlessIndex + 4 > BindlessCount; }
 	int GetTextureArrayIndex(DWORD PolyFlags, CachedTexture* tex, bool clamp = false);
 
 	VulkanDescriptorSet* GetBindlessSet() { return Textures.BindlessSet.get(); }
@@ -68,6 +68,10 @@ public:
 	void UpdateFrameDescriptors();
 
 	static const int MaxBindlessTextures = 16536;
+	// [KHG Mali fix] Actual size of the bindless array we create — clamped at bring-up to what the
+	// device's descriptor-indexing limits allow (== MaxBindlessTextures on Adreno; possibly smaller on
+	// old Mali). Used for the pool/layout/allocate AND the "array full" guard so we never overrun it.
+	int BindlessCount = MaxBindlessTextures;
 
 	VulkanDescriptorSetLayout* GetTextureBindlessLayout() { return Textures.BindlessLayout.get(); }
 	VulkanDescriptorSetLayout* GetPresentLayout() { return Present.Layout.get(); }

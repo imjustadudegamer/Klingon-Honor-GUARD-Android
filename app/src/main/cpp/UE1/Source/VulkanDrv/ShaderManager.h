@@ -65,8 +65,6 @@ public:
 		std::unique_ptr<VulkanShader> BlurHorizontal;
 	} Bloom;
 
-	static std::string LoadShaderCode(const std::string& filename, const std::string& defines = {});
-
 private:
 	UVulkanRenderDevice* renderer = nullptr;
 };

@@ -66,7 +66,6 @@ public class UnrealSDLActivity extends SDLActivity implements InputManager.Input
             int eventType);
 
     private static native void nativeAndroidControllerReset(); // ANDROID_CONTROLLER_NATIVE_RESET_V88
-    private static native boolean nativeAndroidIsMenuV124(); // UNREAL_ANDROID_TOUCH_OVERLAY_V125 (broad: incl. Console)
     private static native boolean nativeAndroidIsUiMenuV142(); // UNREAL_ANDROID_TOUCH_LCARS_V142 (strict: Menuing only)
     private static native boolean nativeAndroidIsCutsceneV142(); // UNREAL_ANDROID_TOUCH_FMV_SKIP_V142
     private static native void nativeAndroidTouchLookV131(float x, float y); // UNREAL_ANDROID_TOUCH_RIGHT_LOOK_UT99_V131 explicit native path

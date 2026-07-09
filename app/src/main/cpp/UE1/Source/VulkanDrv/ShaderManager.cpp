@@ -45,8 +45,3 @@ ShaderManager::~ShaderManager()
 {
 }
 
-std::string ShaderManager::LoadShaderCode(const std::string& filename, const std::string& defines)
-{
-	// [KHG] Unused on Android (shaders are precompiled to SPIR-V). Kept for header-signature compatibility.
-	return std::string();
-}

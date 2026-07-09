@@ -59,7 +59,7 @@ UVulkanRenderDevice::UVulkanRenderDevice()
 	BloomAmount = 128;
 	LODBias = 0.0f;
 	LightMode = 0;          // [KHG] GL parity: no actor *1.5 (flag 32), no lightmap*2 disable (flag 64)
-	GlideGamma = 1;         // [KHG] 3dfx Glide look: present gamma = 0.5+1.5*Brightness (GlideDrv Flush@107027E0); 0 = old flat Brightness*2.0
+	GlideGamma = 1;         // [KHG] 3dfx Glide look: present gamma = 0.5+1.5*Brightness; 0 = old flat Brightness*2.0
 	GammaCorrectScreenshots = 1;
 	VkDeviceIndex = 0;
 	VkDebug = 0;
@@ -162,10 +162,39 @@ void UVulkanRenderDevice::RecreateSwapChainForResume()
 	unguard;
 }
 
+// [KHG Mali diag] Breadcrumb logger for the Vulkan bring-up. Writes each sub-step to THREE sinks so a
+// non-technical reporter can retrieve it: (1) logcat "KHGBoot", (2) the engine log Unreal.log (unbuffered,
+// survives a hard SIGSEGV), and (3) a dedicated, obvious file <OBB>/Unreal/KHG_vulkan_boot.log that is
+// fflush+fclose'd every line (so the LAST line before a driver segfault names the exact failing step).
+#ifdef PLATFORM_ANDROID
+#include <android/log.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+static void KHGBoot( const char* Fmt, ... )
+{
+	char Buf[1200];
+	va_list ap; va_start( ap, Fmt );
+	vsnprintf( Buf, sizeof(Buf), Fmt, ap );
+	va_end( ap );
+	__android_log_write( ANDROID_LOG_ERROR, "KHGBoot", Buf );
+	debugf( NAME_Log, "[KHGBoot] %s", Buf );
+	const char* Root = getenv( "UE1_ANDROID_ROOT" );
+	char Path[1400];
+	snprintf( Path, sizeof(Path), "%s/KHG_vulkan_boot.log", (Root && Root[0]) ? Root : "." );
+	FILE* F = fopen( Path, "a" );
+	if( F ) { fprintf( F, "%s\n", Buf ); fflush( F ); fclose( F ); }
+}
+#else
+static void KHGBoot( const char*, ... ) {}
+#endif
+
 // Instance + Android surface + bindless device + the nine managers.
 UBOOL UVulkanRenderDevice::BringUpVulkan()
 {
 	guard(UVulkanRenderDevice::BringUpVulkan);
+	KHGBoot( "================ KHG Vulkan bring-up ================" );
+	KHGBoot( "BringUpVulkan: ENTER" );
 
 	SDL_Window* win = (SDL_Window*)Viewport->GetWindow();
 	if( !win )
@@ -183,7 +212,9 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	ib.OptionalExtension( VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME ); // HDR colorspace query (Hdr=0)
 	if( VkDebug )
 		ib.DebugLayer( true );
+	KHGBoot( "step 1: create VkInstance (api 1.1 -> 1.0)" );
 	Instance = ib.Create();
+	KHGBoot( "step 1: VkInstance OK" );
 
 	// Pull the native window from SDL and make the surface ourselves.
 	SDL_SysWMinfo wm; SDL_VERSION( &wm.version );
@@ -199,6 +230,8 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 		return 0;
 	}
 	debugf( NAME_Log, "VulkanDrv: ANativeWindow=%p %dx%d", (void*)awin,
+		ANativeWindow_getWidth( awin ), ANativeWindow_getHeight( awin ) );
+	KHGBoot( "step 2: ANativeWindow %dx%d, creating VkAndroidSurfaceKHR",
 		ANativeWindow_getWidth( awin ), ANativeWindow_getHeight( awin ) );
 
 	VkAndroidSurfaceCreateInfoKHR sci = {};
@@ -220,7 +253,43 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	deviceBuilder.RequireExtension( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
 	deviceBuilder.OptionalDescriptorIndexing();
 	deviceBuilder.SelectDevice( VkDeviceIndex );
+	KHGBoot( "step 3: create VkDevice (require descriptor_indexing)" );
 	Device = deviceBuilder.Create( Instance );
+	KHGBoot( "step 3: VkDevice OK" );
+
+	// [KHG Mali diag] Dump the EXACT driver identity + descriptor-indexing caps/limits. This is what
+	// distinguishes the crash hypotheses: if descriptorBindingSampledImageUpdateAfterBind is enabled=0,
+	// or a UAB limit is < the 16536-wide bindless array we build, an old Mali (r32p1) segfaults building
+	// the descriptor pool/set. On Adreno the feature is 1 and the limits are huge (so nothing changes).
+	{
+		VkPhysicalDevice pd = Device->PhysicalDevice.Device;
+		VkPhysicalDeviceDriverProperties drv = {};
+		drv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+		VkPhysicalDeviceProperties2 p2 = {};
+		p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+		p2.pNext = &drv;
+		if( vkGetPhysicalDeviceProperties2 )
+			vkGetPhysicalDeviceProperties2( pd, &p2 );
+		const auto& P    = Device->PhysicalDevice.Properties.Properties;
+		const auto& DIp  = Device->PhysicalDevice.Properties.DescriptorIndexing;
+		const auto& DIs  = Device->PhysicalDevice.Features.DescriptorIndexing;   // supported
+		const auto& DIe  = Device->EnabledFeatures.DescriptorIndexing;           // enabled at vkCreateDevice
+		KHGBoot( "GPU '%s' api %u.%u.%u drvVer=0x%08x vendor=0x%04x device=0x%04x",
+			P.deviceName, VK_VERSION_MAJOR(P.apiVersion), VK_VERSION_MINOR(P.apiVersion),
+			VK_VERSION_PATCH(P.apiVersion), P.driverVersion, P.vendorID, P.deviceID );
+		KHGBoot( "Driver name='%s' info='%s'", drv.driverName, drv.driverInfo );
+		KHGBoot( "DI supported: partialBound=%d runtimeArr=%d nonUniform=%d varCount=%d sampledImgUAB=%d",
+			(int)DIs.descriptorBindingPartiallyBound, (int)DIs.runtimeDescriptorArray,
+			(int)DIs.shaderSampledImageArrayNonUniformIndexing, (int)DIs.descriptorBindingVariableDescriptorCount,
+			(int)DIs.descriptorBindingSampledImageUpdateAfterBind );
+		KHGBoot( "DI enabled:   partialBound=%d runtimeArr=%d nonUniform=%d varCount=%d sampledImgUAB=%d",
+			(int)DIe.descriptorBindingPartiallyBound, (int)DIe.runtimeDescriptorArray,
+			(int)DIe.shaderSampledImageArrayNonUniformIndexing, (int)DIe.descriptorBindingVariableDescriptorCount,
+			(int)DIe.descriptorBindingSampledImageUpdateAfterBind );
+		KHGBoot( "Limits: maxPerStageSampledImg=%u maxPerStageUAB_SampledImg=%u maxSetUAB_SampledImg=%u maxUAB_all=%u (bindless ceiling=16536)",
+			P.limits.maxPerStageDescriptorSampledImages, DIp.maxPerStageDescriptorUpdateAfterBindSampledImages,
+			DIp.maxDescriptorSetUpdateAfterBindSampledImages, DIp.maxUpdateAfterBindDescriptorsInAllPools );
+	}
 
 	bool supportsBindless =
 		Device->EnabledFeatures.DescriptorIndexing.descriptorBindingPartiallyBound &&
@@ -229,6 +298,7 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	if( !supportsBindless )
 	{
 		debugf( NAME_Warning, "VulkanDrv: GPU lacks bindless textures -> GLES fallback" );
+		KHGBoot( "ABORT: GPU lacks required bindless features (partialBound/runtimeArray/nonUniform) -> return 0" );
 		return 0;
 	}
 
@@ -238,16 +308,17 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 		props.limits.maxImageDimension2D );
 
 	// Construct the managers; CommandBufferManager builds the swapchain object (its images are created lazily on first present).
-	Buffers.reset( new BufferManager( this ) );
-	Commands.reset( new CommandBufferManager( this ) );
-	Samplers.reset( new SamplerManager( this ) );
-	Textures.reset( new TextureManager( this ) );
-	Shaders.reset( new ShaderManager( this ) );
-	Uploads.reset( new UploadManager( this ) );
-	DescriptorSets.reset( new DescriptorSetManager( this ) );
-	RenderPasses.reset( new RenderPassManager( this ) );
-	Framebuffers.reset( new FramebufferManager( this ) );
+	KHGBoot( "step 4: construct BufferManager" );        Buffers.reset( new BufferManager( this ) );
+	KHGBoot( "step 4: construct CommandBufferManager (builds swapchain)" ); Commands.reset( new CommandBufferManager( this ) );
+	KHGBoot( "step 4: construct SamplerManager" );       Samplers.reset( new SamplerManager( this ) );
+	KHGBoot( "step 4: construct TextureManager" );       Textures.reset( new TextureManager( this ) );
+	KHGBoot( "step 4: construct ShaderManager" );        Shaders.reset( new ShaderManager( this ) );
+	KHGBoot( "step 4: construct UploadManager" );        Uploads.reset( new UploadManager( this ) );
+	KHGBoot( "step 4: construct DescriptorSetManager (bindless UpdateAfterBind pool <-- prime suspect)" ); DescriptorSets.reset( new DescriptorSetManager( this ) );
+	KHGBoot( "step 4: construct RenderPassManager (eager bloom pipeline)" ); RenderPasses.reset( new RenderPassManager( this ) );
+	KHGBoot( "step 4: construct FramebufferManager (eager present pipeline)" ); Framebuffers.reset( new FramebufferManager( this ) );
 
+	KHGBoot( "BringUpVulkan: ALL 9 MANAGERS OK -> return 1 (SUCCESS - Vulkan is up)" );
 	return 1;
 	unguard;
 }
@@ -926,7 +997,7 @@ vec4 UVulkanRenderDevice::ApplyInverseGamma( vec4 color )
 {
 	if( Viewport->IsOrtho() )
 		return color;
-	// [KHG] 3dfx Glide gamma ramp grGammaCorrectionValue(0.5+1.5*Brightness) (GlideDrv Flush@107027E0); GlideGamma=0 restores the flat Brightness*2.0.
+	// [KHG] 3dfx Glide gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
 	float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 	float gammaRed = Max( brightness + GammaOffset + GammaOffsetRed, 0.001f );
 	float gammaGreen = Max( brightness + GammaOffset + GammaOffsetGreen, 0.001f );
@@ -1581,7 +1652,7 @@ PresentPushConstants UVulkanRenderDevice::GetPresentPushConstants()
 	}
 	else
 	{
-		// [KHG] 3dfx Glide gamma ramp grGammaCorrectionValue(0.5+1.5*Brightness) (GlideDrv Flush@107027E0); GlideGamma=0 restores the flat Brightness*2.0.
+		// [KHG] 3dfx Glide gamma ramp: present gamma = 0.5+1.5*Brightness; GlideGamma=0 restores the flat Brightness*2.0.
 		float brightness = Clamp( (float)( GlideGamma ? (0.5 + 1.5 * Viewport->Client->Brightness) : (Viewport->Client->Brightness * 2.0) ), 0.05f, 2.99f );
 
 		if( GammaMode == 0 )
