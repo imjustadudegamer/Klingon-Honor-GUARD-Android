@@ -200,8 +200,16 @@ void UPendingLevel::NotifyReceivedText( UNetConnection* Connection, const char* 
 			FPackageInfo& Info = Connection->Driver->Map(i);
 			if( !appFindPackageFile( Info.Parent->GetName(), &Info.Guid, Filename ) )
 			{
+				// [KHG] Never stat a native "<name>.dll" at runtime: on Android every native package is
+				// statically linked into the app, so there is no external DLL/SO to probe. appGetDllHandle
+				// is a symbol-table lookup (no filesystem access) and resolves such packages; genuine data
+				// packages with no local file fall through to the download path unchanged.
+#ifdef UNREAL_STATIC
+				if( appGetDllHandle( Info.Parent->GetName() ) == NULL )
+#else
 				appSprintf( Filename, "%s.dll", Info.Parent->GetName() );
 				if( appFSize(Filename) <= 0 )
+#endif
 				{
 					// We need to download this package.
 					FilesNeeded++;

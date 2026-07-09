@@ -97,31 +97,58 @@ static UBOOL AndroidDirHasAnyUnr( const char* Path )
 	return Found;
 }
 
+// Case-insensitive "does <Dir>/<Name> exist and is readable". Android's FS is case-sensitive, but a
+// user's imported game data may vary the casing of Core.u / Klingons.u / Entry.unr etc. Tries the exact
+// name first (fast path), then scans the directory for a case-insensitive match.
+static UBOOL AndroidFileExistsReadableCI( const char* Dir, const char* Name )
+{
+	if( !Dir || !Name || !Name[0] )
+		return false;
+
+	char Path[1024];
+	snprintf( Path, sizeof(Path), "%s/%s", Dir, Name );
+	if( AndroidFileExistsReadable( Path ) )
+		return true;
+
+	DIR* D = opendir( Dir );
+	if( !D )
+		return false;
+
+	UBOOL Found = false;
+	for( struct dirent* E = readdir( D ); E; E = readdir( D ) )
+	{
+		if( E->d_name && appStricmp( E->d_name, Name ) == 0 )
+		{
+			snprintf( Path, sizeof(Path), "%s/%s", Dir, E->d_name );
+			Found = AndroidFileExistsReadable( Path );
+			break;
+		}
+	}
+	closedir( D );
+	return Found;
+}
+
 static UBOOL AndroidLooksLikeUnrealRoot( const char* Root )
 {
 	if( !Root || !Root[0] )
 		return false;
 
-	char Path[1024];
-	snprintf( Path, sizeof(Path), "%s/System/Core.u", Root );
-	if( !AndroidFileExistsReadable( Path ) )
+	// Case-insensitive detection so an import whose files differ only in case is still recognised
+	// (the package loader, appFopen, is likewise case-insensitive on Android).
+	char SystemDir[1024], MapsDir[1024];
+	snprintf( SystemDir, sizeof(SystemDir), "%s/System", Root );
+	if( !AndroidFileExistsReadableCI( SystemDir, "Core.u" ) )
+		return false;
+	if( !AndroidFileExistsReadableCI( SystemDir, "Engine.u" ) )
+		return false;
+	if( !AndroidFileExistsReadableCI( SystemDir, "Klingons.u" ) )
 		return false;
 
-	snprintf( Path, sizeof(Path), "%s/System/Engine.u", Root );
-	if( !AndroidFileExistsReadable( Path ) )
+	snprintf( MapsDir, sizeof(MapsDir), "%s/Maps", Root );
+	if( !AndroidDirExists( MapsDir ) )
 		return false;
 
-	snprintf( Path, sizeof(Path), "%s/System/Klingons.u", Root );
-	if( !AndroidFileExistsReadable( Path ) )
-		return false;
-
-	snprintf( Path, sizeof(Path), "%s/Maps", Root );
-	if( !AndroidDirExists( Path ) )
-		return false;
-
-	char EntryPath[1024];
-	snprintf( EntryPath, sizeof(EntryPath), "%s/Entry.unr", Path );
-	return AndroidFileExistsReadable( EntryPath ) || AndroidDirHasAnyUnr( Path );
+	return AndroidFileExistsReadableCI( MapsDir, "Entry.unr" ) || AndroidDirHasAnyUnr( MapsDir );
 }
 
 static void AndroidSetUnrealRoot( const char* Root )

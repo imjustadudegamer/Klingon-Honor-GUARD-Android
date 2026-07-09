@@ -210,6 +210,16 @@ final class UnrealDataPaths {
         // was read, now folded into Unreal.ini's [Unreal.UnrealOptionsMenu]). All three are gone so there
         // are no stray, unused .ini files created or loaded at runtime — one file, one source of truth.
         copyAssetIfMissing(context, "ue1_config/Unreal.ini", new File(systemDir, "Unreal.ini"));
+        // UNREAL_ANDROID_CONFIG_CORRUPTION_GUARD_V152: if the on-device Unreal.ini exists but is genuinely
+        // corrupt (binary garbage, NUL bytes, or a non-ini blob), back it up and rewrite from the bundled
+        // template BEFORE the section-merge/key-repair below, so those operate on a valid file.
+        healCorruptUnrealIni(context, new File(systemDir, "Unreal.ini"), "ue1_config/Unreal.ini");
+        // UNREAL_ANDROID_CONFIG_WRITABLE_GUARD_V152: a valid Unreal.ini placed by something other than the
+        // app (an adb push — owned by shell; a file-manager copy; a backup/restore) can belong to a
+        // different uid and be read-only to the app, so every later repair AND the engine's own SaveConfig
+        // silently fail with EACCES. Reclaim ownership in place (content preserved) so all downstream writes
+        // — Java and native — succeed. Runs after the corruption guard so a corrupt file is already gone.
+        ensureConfigWritable(new File(systemDir, "Unreal.ini"));
         // UNREAL_ANDROID_CONFIG_HARDEN_V151: copyAssetIfMissing only writes when the file is ABSENT.
         // A truncated or partially-written Unreal.ini (an interrupted first-run copy, a file left by
         // an older/broken build, or one native accidentally stubbed) is otherwise kept as-is and then
@@ -218,6 +228,80 @@ final class UnrealDataPaths {
         // missing/empty, otherwise merge back any [Section] that the shipped asset has but the
         // on-device file lacks. Existing sections/keys (including the player's rebinds) are untouched.
         ensureUnrealIniComplete(context, new File(systemDir, "Unreal.ini"), "ue1_config/Unreal.ini");
+    }
+
+    // UNREAL_ANDROID_CONFIG_CORRUPTION_GUARD_V152: full-recovery safety net. copyAssetIfMissing only writes
+    // when the file is ABSENT and ensureUnrealIniComplete only merges MISSING sections — neither repairs a
+    // file that exists but is genuinely corrupt (binary garbage from an interrupted write, a NUL-filled blob,
+    // a non-ini file). Detect that and, if corrupt, preserve it as Unreal.ini.corrupt.bak (never destroyed)
+    // and rewrite Unreal.ini from the bundled template. Runs before the section/key repair so those see a
+    // valid file; reconstructSaveSlots afterwards restores the save-slot labels from Save/*.usa.
+    private static void healCorruptUnrealIni(Context context, File target, String asset) {
+        try {
+            if (target == null || !target.isFile()) return; // absence is handled by copyAssetIfMissing
+            byte[] bytes = Files.readAllBytes(target.toPath());
+            if (!isIniCorrupt(bytes)) return;
+            File backup = new File(target.getParentFile(), target.getName() + ".corrupt.bak");
+            try {
+                Files.copy(target.toPath(), backup.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException ignore) { /* best-effort backup; still rewrite below */ }
+            try (InputStream in = context.getAssets().open(asset)) {
+                byte[] template = readAllBytes(in);
+                if (template.length == 0) return; // asset unreadable — do not destroy what little we have
+                // Delete first (best-effort) so recovery works even if the corrupt file is read-only or
+                // owned by a different uid: the app owns the System/ dir, so it can replace files in it
+                // even when it cannot overwrite them in place.
+                try { target.delete(); } catch (Throwable ignore) { /* fall through to overwrite */ }
+                Files.write(target.toPath(), template);
+            }
+            Log.w(TAG_CONFIG, "Unreal.ini failed integrity check; backed up to " + backup.getName()
+                    + " and rewrote from template: " + target.getAbsolutePath());
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "Could not verify/heal Unreal.ini integrity for "
+                    + (target != null ? target.getAbsolutePath() : "null") + ": " + t);
+        }
+    }
+
+    // UNREAL_ANDROID_CONFIG_WRITABLE_GUARD_V152: make Unreal.ini writable by the app regardless of who
+    // created it. A file pushed/restored by another uid (adb=shell, a backup app, a file manager) can be
+    // read-only to the app; since the app owns the System/ directory it can always replace files in it.
+    // If the config exists but is not app-writable, rewrite it in place with the SAME content so it becomes
+    // app-owned — content preserved, only ownership/permission fixed. No-op when already writable.
+    private static void ensureConfigWritable(File target) {
+        try {
+            if (target == null || !target.isFile()) return;
+            if (target.canWrite()) return; // already writable by the app — nothing to do
+            byte[] content = Files.readAllBytes(target.toPath());
+            target.delete(); // app owns the dir -> can remove a foreign-owned/read-only file
+            Files.write(target.toPath(), content);
+            Log.w(TAG_CONFIG, "Unreal.ini was not app-writable; rewrote in place to reclaim ownership: "
+                    + target.getAbsolutePath());
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "Could not make Unreal.ini app-writable: " + t);
+        }
+    }
+
+    // True only when the bytes are clearly not a usable text ini: a NUL byte, too many non-text control
+    // bytes (binary garbage), or non-empty with no [section] header at all. NOTE: UE1 configs are ANSI/
+    // Latin-1, so high bytes (0x80-0xFF, e.g. an accented player name) are NOT treated as corruption — a
+    // strict-UTF-8 test would wrongly nuke valid configs. Empty/whitespace files are NOT reported here;
+    // ensureUnrealIniComplete already rewrites those from the template.
+    private static boolean isIniCorrupt(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return false;
+        int control = 0;
+        for (byte b : bytes) {
+            int u = b & 0xFF;
+            if (u == 0) return true; // NUL byte => binary garbage, never in a text ini
+            if (u < 0x09 || (u > 0x0D && u < 0x20)) control++; // control chars other than \t \n \v \f \r
+        }
+        if ((long) control * 20 > bytes.length) return true; // >5% control bytes => not text
+        // ISO-8859-1 keeps every byte 1:1 (ASCII section headers survive); a non-empty file with no
+        // [section] header at all is not a usable ini.
+        String text = new String(bytes, StandardCharsets.ISO_8859_1);
+        if (text.trim().length() > 0
+                && !java.util.regex.Pattern.compile("(?m)^\\s*\\[[^\\]]+\\]\\s*$").matcher(text).find())
+            return true;
+        return false;
     }
 
     private static void copyAssetIfMissing(Context context, String asset, File out) {
@@ -535,7 +619,7 @@ final class UnrealDataPaths {
             // force-pinned RightStickScale at 1.00 — silently capping look sensitivity no matter what the ini
             // said. Seed sane sensitivity defaults but PRESERVE the player's edits (set-if-absent), so these
             // are live-tunable in Unreal.ini. 2.5 = a moderate default; tune up/down to taste.
-            patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeRightStickScale", "2.50");
+            patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeRightStickScale", "2.00");
             patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeLeftStickScale", "2.50"); // ANDROID_LEFTSTICK_NATIVE_SENSITIVITY_V127
             patched = setIniValueIfAbsent(patched, "NSDLDrv.NSDLClient", "AndroidNativeRightStickSmoothing", "False"); // ANDROID_RIGHT_STICK_SMOOTHING_TOGGLE_V129
             patched = setIniValue(patched, "NSDLDrv.NSDLClient", "AndroidNativeLeftStickDeadzone", "0.08"); // UNREAL_ANDROID_CONFIG_PRESERVE_V139
