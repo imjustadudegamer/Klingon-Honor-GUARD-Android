@@ -206,13 +206,16 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 
 	// Instance with the Android surface extensions; ZVulkan's VulkanInstance ctor runs volk init so vkCreateAndroidSurfaceKHR is live afterwards.
 	VulkanInstanceBuilder ib;
-	ib.ApiVersionsToTry( { VK_API_VERSION_1_1, VK_API_VERSION_1_0 } );
+	// [KHG compat] Try 1.2 first so descriptor indexing exposed through Vulkan 1.2 CORE (rather than the
+	// VK_EXT_descriptor_indexing extension string) is visible; fall back to 1.1 then 1.0. A 1.0/1.1-only
+	// device that has no descriptor indexing at all is caught cleanly by the supportsBindless check below.
+	ib.ApiVersionsToTry( { VK_API_VERSION_1_2, VK_API_VERSION_1_1, VK_API_VERSION_1_0 } );
 	ib.RequireExtension( VK_KHR_SURFACE_EXTENSION_NAME );
 	ib.RequireExtension( VK_KHR_ANDROID_SURFACE_EXTENSION_NAME );
 	ib.OptionalExtension( VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME ); // HDR colorspace query (Hdr=0)
 	if( VkDebug )
 		ib.DebugLayer( true );
-	KHGBoot( "step 1: create VkInstance (api 1.1 -> 1.0)" );
+	KHGBoot( "step 1: create VkInstance (api 1.2 -> 1.1 -> 1.0)" );
 	Instance = ib.Create();
 	KHGBoot( "step 1: VkInstance OK" );
 
@@ -247,13 +250,44 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	Surface = std::make_shared<VulkanSurface>( Instance, surfaceHandle );
 	BoundWindow = awin;
 
-	// Bindless device: RequireExtension(DESCRIPTOR_INDEXING) so an absent EXT rejects the device (GLES fallback), vs Optional which would false-positive the bindless check then crash.
+	// Bindless device. We DON'T require the VK_EXT_descriptor_indexing extension *string* any more: a
+	// device that exposes descriptor indexing through Vulkan 1.2 core lacks the string but is fully
+	// capable (ZVulkan now folds the core Vulkan12 features into DescriptorIndexing). OptionalDescriptorIndexing
+	// still enables the EXT when it IS present. Capability is enforced by the supportsBindless check below,
+	// which returns 0 cleanly (never crashes) on a device that genuinely lacks descriptor indexing.
 	auto deviceBuilder = VulkanDeviceBuilder();
 	deviceBuilder.Surface( Surface );
-	deviceBuilder.RequireExtension( VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME );
 	deviceBuilder.OptionalDescriptorIndexing();
 	deviceBuilder.SelectDevice( VkDeviceIndex );
-	KHGBoot( "step 3: create VkDevice (require descriptor_indexing)" );
+
+	// [KHG compat] Log every physical device's identity, descriptor-indexing capability and the base
+	// features FindDevices requires, BEFORE selection. Previously a device was rejected with only
+	// "No Vulkan device found supports the minimum requirements" and no GPU/feature detail, so a report
+	// couldn't be diagnosed. This dump survives the SIGSEGV/abort (KHGBoot flushes per line).
+	KHGBoot( "enumerating %d Vulkan physical device(s):", (int)Instance->PhysicalDevices.size() );
+	for( size_t di = 0; di < Instance->PhysicalDevices.size(); di++ )
+	{
+		const auto& info = Instance->PhysicalDevices[di];
+		const auto& P    = info.Properties.Properties;
+		const auto& F    = info.Features.Features;
+		const auto& DI   = info.Features.DescriptorIndexing;
+		KHGBoot( "  dev[%d] '%s' api %u.%u.%u drvVer=0x%08x vendor=0x%04x device=0x%04x type=%d",
+			(int)di, P.deviceName, VK_VERSION_MAJOR(P.apiVersion), VK_VERSION_MINOR(P.apiVersion),
+			VK_VERSION_PATCH(P.apiVersion), P.driverVersion, P.vendorID, P.deviceID, (int)P.deviceType );
+		KHGBoot( "  dev[%d] base: samplerAniso=%d fragStoresAtomics=%d independentBlend=%d  DI: runtimeArr=%d partialBound=%d nonUniform=%d",
+			(int)di, (int)F.samplerAnisotropy, (int)F.fragmentStoresAndAtomics, (int)F.independentBlend,
+			(int)DI.runtimeDescriptorArray, (int)DI.descriptorBindingPartiallyBound, (int)DI.shaderSampledImageArrayNonUniformIndexing );
+		const bool baseOk = F.samplerAnisotropy && F.fragmentStoresAndAtomics && F.independentBlend;
+		const bool diOk   = DI.runtimeDescriptorArray && DI.descriptorBindingPartiallyBound && DI.shaderSampledImageArrayNonUniformIndexing;
+		if( !baseOk )
+			KHGBoot( "  dev[%d] REJECT: missing base feature (samplerAniso/fragStoresAtomics/independentBlend)", (int)di );
+		else if( !diOk )
+			KHGBoot( "  dev[%d] REJECT: no descriptor indexing (needs runtimeArray+partiallyBound+nonUniform via EXT or core 1.2)", (int)di );
+		else
+			KHGBoot( "  dev[%d] OK: meets bindless requirements", (int)di );
+	}
+
+	KHGBoot( "step 3: create VkDevice (bindless via descriptor indexing; EXT string optional)" );
 	Device = deviceBuilder.Create( Instance );
 	KHGBoot( "step 3: VkDevice OK" );
 

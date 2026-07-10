@@ -132,7 +132,13 @@ void VulkanDevice::CreateDevice()
 		*next = &EnabledFeatures.RayQuery;
 		next = &EnabledFeatures.RayQuery.pNext;
 	}
-	if (SupportsExtension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME))
+	// [KHG compat] Chain the descriptor-indexing features when the EXT is enabled OR when the device
+	// exposes them through Vulkan 1.2 core (no EXT string, but a DI feature bit is set). The EXT-typed
+	// struct's sType is the core-promoted value, so it is valid in vkCreateDevice pNext on a 1.2 device.
+	if (SupportsExtension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) ||
+		EnabledFeatures.DescriptorIndexing.runtimeDescriptorArray ||
+		EnabledFeatures.DescriptorIndexing.descriptorBindingPartiallyBound ||
+		EnabledFeatures.DescriptorIndexing.shaderSampledImageArrayNonUniformIndexing)
 	{
 		*next = &EnabledFeatures.DescriptorIndexing;
 		next = &EnabledFeatures.DescriptorIndexing.pNext;

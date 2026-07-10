@@ -251,6 +251,20 @@ std::vector<VulkanPhysicalDevice> VulkanInstance::GetPhysicalDevices(VkInstance 
 
 		if (apiVersion != VK_API_VERSION_1_0)
 		{
+			// [KHG compat] On Vulkan 1.2+, descriptor indexing is CORE and a driver is not required to
+			// still advertise VK_EXT_descriptor_indexing. Devices that expose it only through core (e.g.
+			// some Adreno 6xx driver revs) were invisible to the EXT-string checks below and got rejected.
+			// When the EXT string is absent but the device is 1.2+, query the core Vulkan12 structs and
+			// fold the descriptor-indexing members back into the EXT-typed structs the rest of the code reads.
+			// NB: gate on the DEVICE's apiVersion, not the instance's — on Android a 1.2 instance can be
+			// created over a 1.1-only device (the loader honours the requested version), and chaining a
+			// Vulkan1.2 struct onto a 1.1 device's feature query is not guaranteed safe across drivers.
+			VkPhysicalDeviceProperties baseProps = {};
+			vkGetPhysicalDeviceProperties(dev.Device, &baseProps);
+			const bool useCore12DI = (baseProps.apiVersion >= VK_API_VERSION_1_2) && !checkForExtension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+			VkPhysicalDeviceVulkan12Features v12feats = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+			VkPhysicalDeviceVulkan12Properties v12props = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
+
 			VkPhysicalDeviceProperties2 deviceProperties2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 
 			void** next = const_cast<void**>(&deviceProperties2.pNext);
@@ -269,12 +283,26 @@ std::vector<VulkanPhysicalDevice> VulkanInstance::GetPhysicalDevices(VkInstance 
 				*next = &dev.Properties.LayeredDriver;
 				next = &dev.Properties.LayeredDriver.pNext;
 			}
+			if (useCore12DI)
+			{
+				*next = &v12props;
+				next = &v12props.pNext;
+			}
 
 			vkGetPhysicalDeviceProperties2(dev.Device, &deviceProperties2);
 			dev.Properties.Properties = deviceProperties2.properties;
 			dev.Properties.AccelerationStructure.pNext = nullptr;
 			dev.Properties.DescriptorIndexing.pNext = nullptr;
 			dev.Properties.LayeredDriver.pNext = nullptr;
+			if (useCore12DI)
+			{
+				// Only the UpdateAfterBind sampled-image limits are consumed (bindless-array clamp).
+				auto& dip = dev.Properties.DescriptorIndexing;
+				dip.maxUpdateAfterBindDescriptorsInAllPools = v12props.maxUpdateAfterBindDescriptorsInAllPools;
+				dip.maxPerStageUpdateAfterBindResources = v12props.maxPerStageUpdateAfterBindResources;
+				dip.maxPerStageDescriptorUpdateAfterBindSampledImages = v12props.maxPerStageDescriptorUpdateAfterBindSampledImages;
+				dip.maxDescriptorSetUpdateAfterBindSampledImages = v12props.maxDescriptorSetUpdateAfterBindSampledImages;
+			}
 
 			VkPhysicalDeviceFeatures2 deviceFeatures2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 
@@ -299,6 +327,11 @@ std::vector<VulkanPhysicalDevice> VulkanInstance::GetPhysicalDevices(VkInstance 
 				*next = &dev.Features.DescriptorIndexing;
 				next = &dev.Features.DescriptorIndexing.pNext;
 			}
+			if (useCore12DI)
+			{
+				*next = &v12feats;
+				next = &v12feats.pNext;
+			}
 
 			vkGetPhysicalDeviceFeatures2(dev.Device, &deviceFeatures2);
 			dev.Features.Features = deviceFeatures2.features;
@@ -306,6 +339,34 @@ std::vector<VulkanPhysicalDevice> VulkanInstance::GetPhysicalDevices(VkInstance 
 			dev.Features.AccelerationStructure.pNext = nullptr;
 			dev.Features.RayQuery.pNext = nullptr;
 			dev.Features.DescriptorIndexing.pNext = nullptr;
+			if (useCore12DI)
+			{
+				// Fold core Vulkan12 descriptor-indexing bits into the EXT-typed struct the rest of
+				// the code (device suitability + device create) reads. The EXT and core structs share
+				// identical field names and sType values (the EXT was promoted to core in 1.2), so the
+				// same struct can be chained back into vkCreateDevice on a core-only 1.2 device.
+				auto& di = dev.Features.DescriptorIndexing;
+				di.shaderInputAttachmentArrayDynamicIndexing = v12feats.shaderInputAttachmentArrayDynamicIndexing;
+				di.shaderUniformTexelBufferArrayDynamicIndexing = v12feats.shaderUniformTexelBufferArrayDynamicIndexing;
+				di.shaderStorageTexelBufferArrayDynamicIndexing = v12feats.shaderStorageTexelBufferArrayDynamicIndexing;
+				di.shaderUniformBufferArrayNonUniformIndexing = v12feats.shaderUniformBufferArrayNonUniformIndexing;
+				di.shaderSampledImageArrayNonUniformIndexing = v12feats.shaderSampledImageArrayNonUniformIndexing;
+				di.shaderStorageBufferArrayNonUniformIndexing = v12feats.shaderStorageBufferArrayNonUniformIndexing;
+				di.shaderStorageImageArrayNonUniformIndexing = v12feats.shaderStorageImageArrayNonUniformIndexing;
+				di.shaderInputAttachmentArrayNonUniformIndexing = v12feats.shaderInputAttachmentArrayNonUniformIndexing;
+				di.shaderUniformTexelBufferArrayNonUniformIndexing = v12feats.shaderUniformTexelBufferArrayNonUniformIndexing;
+				di.shaderStorageTexelBufferArrayNonUniformIndexing = v12feats.shaderStorageTexelBufferArrayNonUniformIndexing;
+				di.descriptorBindingUniformBufferUpdateAfterBind = v12feats.descriptorBindingUniformBufferUpdateAfterBind;
+				di.descriptorBindingSampledImageUpdateAfterBind = v12feats.descriptorBindingSampledImageUpdateAfterBind;
+				di.descriptorBindingStorageImageUpdateAfterBind = v12feats.descriptorBindingStorageImageUpdateAfterBind;
+				di.descriptorBindingStorageBufferUpdateAfterBind = v12feats.descriptorBindingStorageBufferUpdateAfterBind;
+				di.descriptorBindingUniformTexelBufferUpdateAfterBind = v12feats.descriptorBindingUniformTexelBufferUpdateAfterBind;
+				di.descriptorBindingStorageTexelBufferUpdateAfterBind = v12feats.descriptorBindingStorageTexelBufferUpdateAfterBind;
+				di.descriptorBindingUpdateUnusedWhilePending = v12feats.descriptorBindingUpdateUnusedWhilePending;
+				di.descriptorBindingPartiallyBound = v12feats.descriptorBindingPartiallyBound;
+				di.descriptorBindingVariableDescriptorCount = v12feats.descriptorBindingVariableDescriptorCount;
+				di.runtimeDescriptorArray = v12feats.runtimeDescriptorArray;
+			}
 		}
 		else
 		{

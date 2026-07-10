@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Privacy: strip the absolute build-machine path from __FILE__ and debug info so the
+# shipped .so (and every crash/assert line it emits, e.g. "[File: ...]" in Unreal.log /
+# KHG_CRASH.log) never leaks the developer's home directory. Paths become project-relative
+# (e.g. "UE1/Source/NSDLDrv/Src/NSDLViewport.cpp") — still useful for debugging, no PII.
+# Declared before add_subdirectory() so it propagates to all targets.
+add_compile_options(
+    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}/="
+    "-ffile-prefix-map=${CMAKE_BINARY_DIR}/=")
+
 # 16 KB page alignment for arm64-v8a: Android 15+ and modern arm64 devices use a
 # 16 KB memory page size, and every loaded .so must have 16 KB-aligned LOAD
 # segments or the app fails to load. The NDK r27 clang driver still defaults to

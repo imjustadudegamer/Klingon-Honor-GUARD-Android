@@ -2170,6 +2170,11 @@ void UNSDLViewport::OpenWindow( void* InParentWindow, UBOOL Temporary, INT NewX,
 		Client->TryRenderDevice( this, "ini:Engine.Engine.GameRenderDevice", Client->StartupFullscreen );
 	if( !RenDev )
 		Client->TryRenderDevice( this, "ini:Engine.Engine.WindowedRenderDevice", 0 );
+	// [KHG compat] Give a clear, actionable message instead of the bare "Assertion failed: RenDev"
+	// (which surfaced under the misleading placeholder title "General protection fault!"). Reached only
+	// when Vulkan bring-up returned no render device on this GPU/driver.
+	if( !RenDev )
+		appErrorf( "No compatible GPU renderer could be created. This device's Vulkan driver does not support the descriptor-indexing / bindless-texture features this renderer requires. See KHG_vulkan_boot.log for per-device capability details." );
 	check(RenDev);
 
 	if( !Temporary )
