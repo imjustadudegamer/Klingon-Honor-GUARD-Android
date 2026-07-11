@@ -15,6 +15,11 @@ OUT="$(mktemp -d)"
 "$GLSLC" --target-env=vulkan1.1 -fshader-stage=vert "$HERE/Scene.vert" -o "$OUT/Scene.vert.spv"
 "$GLSLC" --target-env=vulkan1.1 -fshader-stage=frag "$HERE/Scene.frag" -o "$OUT/Scene.frag.spv"
 "$GLSLC" --target-env=vulkan1.1 -DALPHATEST -fshader-stage=frag "$HERE/Scene.frag" -o "$OUT/Scene.frag.masked.spv"
+# Non-bindless COMPATIBILITY Scene pipeline (4 fixed samplers, no descriptor indexing). Target vulkan1.0
+# (SPIR-V 1.0) so it loads on GPUs without descriptor indexing, down to Vulkan 1.0.
+"$GLSLC" --target-env=vulkan1.0 -fshader-stage=vert "$HERE/SceneCompat.vert" -o "$OUT/SceneCompat.vert.spv"
+"$GLSLC" --target-env=vulkan1.0 -fshader-stage=frag "$HERE/SceneCompat.frag" -o "$OUT/SceneCompat.frag.spv"
+"$GLSLC" --target-env=vulkan1.0 -DALPHATEST -fshader-stage=frag "$HERE/SceneCompat.frag" -o "$OUT/SceneCompat.frag.masked.spv"
 "$GLSLC" --target-env=vulkan1.1 -fshader-stage=vert "$HERE/PPStep.vert" -o "$OUT/PPStep.vert.spv"
 "$GLSLC" --target-env=vulkan1.1 -fshader-stage=frag "$HERE/Present.frag" -o "$OUT/Present.frag.spv"
 "$GLSLC" --target-env=vulkan1.1 -fshader-stage=frag "$HERE/BloomExtract.frag" -o "$OUT/BloomExtract.frag.spv"
@@ -36,6 +41,9 @@ o3=["// [KHG] Auto-generated from Shaders/Scene.{vert,frag} via glslc (NDK 27, v
    emit(out_dir+"/Scene.vert.spv","g_SceneVertSpv"),"",
    emit(out_dir+"/Scene.frag.spv","g_SceneFragSpv"),"",
    emit(out_dir+"/Scene.frag.masked.spv","g_SceneFragMaskedSpv"),"",
+   emit(out_dir+"/SceneCompat.vert.spv","g_SceneCompatVertSpv"),"",
+   emit(out_dir+"/SceneCompat.frag.spv","g_SceneCompatFragSpv"),"",
+   emit(out_dir+"/SceneCompat.frag.masked.spv","g_SceneCompatFragMaskedSpv"),"",
    emit(out_dir+"/PPStep.vert.spv","g_PPStepVertSpv"),"",
    emit(out_dir+"/Present.frag.spv","g_PresentFragSpv"),"",
    emit(out_dir+"/BloomExtract.frag.spv","g_BloomExtractSpv"),"",

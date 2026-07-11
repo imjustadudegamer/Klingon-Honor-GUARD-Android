@@ -6,7 +6,13 @@
 
 DescriptorSetManager::DescriptorSetManager(UVulkanRenderDevice* renderer) : renderer(renderer)
 {
-	CreateBindlessTextureSet();
+	// [KHG compat] Only build the descriptor infrastructure for the SELECTED path. On a GPU without
+	// descriptor indexing we must NOT create the bindless UpdateAfterBind array at all — build the small
+	// fixed 4-binding compatibility layout instead.
+	if (renderer->UseBindlessTextures)
+		CreateBindlessTextureSet();
+	else
+		CreateCompatTextureLayout();
 	CreatePresentLayout();
 	CreatePresentSet();
 	CreateBloomLayout();
@@ -21,6 +27,99 @@ void DescriptorSetManager::ClearCache()
 {
 	Textures.WriteBindless = WriteDescriptors();
 	Textures.NextBindlessIndex = 0;
+	ClearCompatCache();
+}
+
+void DescriptorSetManager::CreateCompatTextureLayout()
+{
+	// Four fixed COMBINED_IMAGE_SAMPLER bindings (0=base, 1=lightmap, 2=detail/fog, 3=macro). No descriptor
+	// indexing, no UpdateAfterBind, no variable count — valid on any Vulkan 1.0 device. Matches SceneCompat.frag.
+	Compat.Layout = DescriptorSetLayoutBuilder()
+		.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+		.AddBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+		.DebugName("CompatTextureLayout")
+		.Create(renderer->Device.get());
+	debugf(NAME_Log, "[KHGBoot] compat: created 4-binding texture layout (non-bindless path)");
+}
+
+VulkanDescriptorSet* DescriptorSetManager::AllocateCompatSet()
+{
+	std::unique_ptr<VulkanDescriptorSet> set;
+	if (!Compat.Pools.empty())
+		set = Compat.Pools.back()->tryAllocate(Compat.Layout.get());
+	if (!set)   // no pool yet, or the last pool is exhausted -> grow
+	{
+		Compat.Pools.push_back(
+			DescriptorPoolBuilder()
+				.Flags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)   // so deferred vkFreeDescriptorSets is legal
+				.AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, CompatSetsPerPool * 4)
+				.MaxSets(CompatSetsPerPool)
+				.DebugName("CompatTexturePool")
+				.Create(renderer->Device.get()));
+		set = Compat.Pools.back()->tryAllocate(Compat.Layout.get());
+	}
+	if (!set)
+		return nullptr;
+	VulkanDescriptorSet* raw = set.get();
+	Compat.Sets.push_back(std::move(set));
+	return raw;
+}
+
+VulkanDescriptorSet* DescriptorSetManager::GetCompatTextureSet(DWORD PolyFlags, CachedTexture* tex, CachedTexture* lightmap, CachedTexture* macrotex, CachedTexture* detailtex, bool clamp)
+{
+	uint32_t samplermode = 0;
+	if (PolyFlags & PF_NoSmooth) samplermode |= 1;
+	if (clamp) samplermode |= 2;
+
+	// View identity keys the cache. Absent textures use the 1x1 null view (the compat shader still statically
+	// references all four bindings, so all must be valid even when the corresponding flag is off).
+	VulkanImageView* nullView = renderer->Textures->NullTextureView.get();
+	VulkanImageView* baseView = tex       ? tex->imageView.get()       : nullView;
+	VulkanImageView* lmView   = lightmap  ? lightmap->imageView.get()  : nullView;
+	VulkanImageView* dtView   = detailtex ? detailtex->imageView.get() : nullView;
+	VulkanImageView* mcView   = macrotex  ? macrotex->imageView.get()  : nullView;
+
+	CompatTexKey key { baseView, lmView, dtView, mcView, samplermode };
+	auto it = Compat.Cache.find(key);
+	if (it != Compat.Cache.end())
+		return it->second;
+
+	VulkanDescriptorSet* set = AllocateCompatSet();
+	if (!set)
+		return nullptr;
+
+	// Base samples with the surface's sampler mode; the auxiliary maps use linear-repeat (sampler 0), matching
+	// the bindless path where GetTextureIndexes passes PolyFlags only to the base and 0 to the others.
+	VulkanSampler* sBase = renderer->Samplers->Samplers[samplermode].get();
+	VulkanSampler* s0    = renderer->Samplers->Samplers[0].get();
+	WriteDescriptors write;
+	write.AddCombinedImageSampler(set, 0, baseView, sBase, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	write.AddCombinedImageSampler(set, 1, lmView,   s0,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	write.AddCombinedImageSampler(set, 2, dtView,   s0,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	write.AddCombinedImageSampler(set, 3, mcView,   s0,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	write.Execute(renderer->Device.get());
+
+	Compat.Cache[key] = set;
+	return set;
+}
+
+void DescriptorSetManager::ClearCompatCache()
+{
+	if (Compat.Cache.empty() && Compat.Sets.empty())
+		return;
+	Compat.Cache.clear();
+	// The orphaned sets may still be bound in the command buffer being recorded or a frame in flight. Defer
+	// their free to the current frame's delete list, which is destroyed only when this frame index is reused
+	// (after its GPU work completed). Freed descriptors return capacity to their pools, which we keep.
+	CommandBufferManager::DeleteList* dl = renderer->Commands ? renderer->Commands->GetCurrentDeleteList() : nullptr;
+	if (dl)
+	{
+		for (auto& s : Compat.Sets)
+			dl->descriptors.push_back(std::move(s));
+	}
+	Compat.Sets.clear();
 }
 
 int DescriptorSetManager::GetTextureArrayIndex(DWORD PolyFlags, CachedTexture* tex, bool clamp)
@@ -72,9 +171,8 @@ void DescriptorSetManager::UpdateBindlessSet()
 
 void DescriptorSetManager::CreateBindlessTextureSet()
 {
-	// [KHG Mali fix — Adreno-safe, no-op there] A March-2021 Mali Bifrost DDK (r32p1, seen on Redmi 13 /
-	// Helio G91 / Mali-G52) SIGSEGVs here inside BringUpVulkan. Two ways this can be invalid usage that an
-	// old driver faults on instead of erroring cleanly:
+	// [KHG Mali fix — Adreno-safe, no-op there] Some older Mali drivers SIGSEGV here inside BringUpVulkan.
+	// Two ways this can be invalid usage that an old driver faults on instead of erroring cleanly:
 	//   (a) we set the UPDATE_AFTER_BIND flags even when descriptorBindingSampledImageUpdateAfterBind was
 	//       NOT enabled at vkCreateDevice (the old bindless check never verified that feature), and
 	//   (b) the array is a fixed 16536, which may exceed the device's UpdateAfterBind sampled-image limit.

@@ -236,26 +236,47 @@ final class UnrealDataPaths {
     // a non-ini file). Detect that and, if corrupt, preserve it as Unreal.ini.corrupt.bak (never destroyed)
     // and rewrite Unreal.ini from the bundled template. Runs before the section/key repair so those see a
     // valid file; reconstructSaveSlots afterwards restores the save-slot labels from Save/*.usa.
+    // UNREAL_ANDROID_CONFIG_CRITICAL_DATA_GUARD_V153: also treat as corrupt a file that passes the
+    // binary-garbage test but is missing boot-critical sections/keys (see configMissingCriticalData) — the
+    // common real-world case being a config truncated mid-section, which isIniCorrupt misses (it still has a
+    // valid [header]) and the section-merge misses (that section's header is present, so it's never re-added).
     private static void healCorruptUnrealIni(Context context, File target, String asset) {
         try {
             if (target == null || !target.isFile()) return; // absence is handled by copyAssetIfMissing
             byte[] bytes = Files.readAllBytes(target.toPath());
-            if (!isIniCorrupt(bytes)) return;
+            String reason;
+            if (isIniCorrupt(bytes)) {
+                reason = "binary/non-ini content";
+            } else {
+                String foreign = configForeignPlatform(bytes);
+                String missing = configMissingCriticalData(bytes);
+                if (foreign != null) {
+                    reason = "foreign-platform config (" + foreign + ")"; // e.g. a Windows Unreal.ini
+                } else if (missing != null) {
+                    reason = "missing critical " + missing;
+                } else {
+                    return; // valid, boot-complete Android config — leave it (and its user edits) alone
+                }
+            }
             File backup = new File(target.getParentFile(), target.getName() + ".corrupt.bak");
+            boolean backedUp = false;
             try {
                 Files.copy(target.toPath(), backup.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException ignore) { /* best-effort backup; still rewrite below */ }
+                backedUp = true;
+            } catch (Throwable ignore) { /* best-effort backup; can fail when the file was placed by another uid
+                                           (e.g. adb push / a file manager owns System/) — still rewrite below */ }
             try (InputStream in = context.getAssets().open(asset)) {
                 byte[] template = readAllBytes(in);
                 if (template.length == 0) return; // asset unreadable — do not destroy what little we have
-                // Delete first (best-effort) so recovery works even if the corrupt file is read-only or
-                // owned by a different uid: the app owns the System/ dir, so it can replace files in it
-                // even when it cannot overwrite them in place.
+                // Overwrite in place: Files.write TRUNCATEs the existing inode, which succeeds even when the
+                // file was placed by another uid and we cannot unlink it. (delete() is a best-effort tidy-up
+                // that no longer gates the rewrite; a failed delete previously left a misleading "backed up" log.)
                 try { target.delete(); } catch (Throwable ignore) { /* fall through to overwrite */ }
                 Files.write(target.toPath(), template);
             }
-            Log.w(TAG_CONFIG, "Unreal.ini failed integrity check; backed up to " + backup.getName()
-                    + " and rewrote from template: " + target.getAbsolutePath());
+            Log.w(TAG_CONFIG, "Unreal.ini failed integrity check (" + reason + "); "
+                    + (backedUp ? "backed up to " + backup.getName() + " and " : "could not back up (proceeding), ")
+                    + "rewrote from template: " + target.getAbsolutePath());
         } catch (Throwable t) {
             Log.w(TAG_CONFIG, "Could not verify/heal Unreal.ini integrity for "
                     + (target != null ? target.getAbsolutePath() : "null") + ": " + t);
@@ -302,6 +323,56 @@ final class UnrealDataPaths {
                 && !java.util.regex.Pattern.compile("(?m)^\\s*\\[[^\\]]+\\]\\s*$").matcher(text).find())
             return true;
         return false;
+    }
+
+    // UNREAL_ANDROID_CONFIG_CRITICAL_DATA_GUARD_V153: {section, key} pairs the engine cannot boot without.
+    // Each MUST be present-and-non-empty in every valid Unreal.ini the engine writes, so a personalized but
+    // healthy config never trips this — only a truncated/gutted one does. Keep this list MINIMAL and truly
+    // boot-critical (absence here is what produced Core.Errors.ConfigNotFound / Engine.Errors.LoadEntry):
+    // the render device + game engine class, the boot map + protocol, and the package search paths.
+    private static final String[][] REQUIRED_CONFIG_DATA = {
+        { "Engine.Engine", "GameRenderDevice" },
+        { "Engine.Engine", "GameEngine" },
+        { "URL",           "Protocol" },
+        { "URL",           "LocalMap" },
+        { "Core.System",   "Paths[0]" },
+        { "Core.System",   "SavePath" },
+    };
+
+    // Returns "Section/Key" for the first REQUIRED_CONFIG_DATA entry that is missing or blank, or null when
+    // all critical data is present. Decoded ISO-8859-1 to match isIniCorrupt (UE1 configs are ANSI/Latin-1,
+    // so a high byte such as an accented player name never derails the parse). getIniValue returns null for
+    // an absent section/key and "" for a present-but-empty one; both count as missing for these keys, which
+    // are never legitimately blank — that is exactly how a value truncated to "GameRenderDevice=" is caught.
+    private static String configMissingCriticalData(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return "Engine.Engine/GameRenderDevice";
+        String text = new String(bytes, StandardCharsets.ISO_8859_1);
+        for (String[] req : REQUIRED_CONFIG_DATA) {
+            String v = getIniValue(text, req[0], req[1]);
+            if (v == null || v.length() == 0) return req[0] + "/" + req[1];
+        }
+        return null;
+    }
+
+    // UNREAL_ANDROID_CONFIG_FOREIGN_GUARD_V153: a Unreal.ini copied from a Windows (or any non-Android) install
+    // is a *valid* ini that passes the corruption and critical-data checks, but it names drivers this port does
+    // not have — e.g. GameRenderDevice=GlideDrv/D3DDrv/SoftDrv/OpenGLDrv, ViewportManager=WinDrv.WindowsClient.
+    // It cannot boot (the engine would try to bind GlideDrv.dll and fail). This port is Vulkan-only with the SDL
+    // client, so the ONLY valid values are VulkanDrv.VulkanRenderDevice and NSDLDrv.NSDLClient; any other named
+    // driver means the file belongs to another platform and must be rewritten from the bundled Android template.
+    // Returns the offending "key=value", or null when the config is native (or the keys are absent — that case
+    // is the critical-data guard's). Case-insensitive; getIniValue already trims. This is the specific reason
+    // the user reported: dropping a retail Windows game folder onto the device left its Unreal.ini in place.
+    private static String configForeignPlatform(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        String text = new String(bytes, StandardCharsets.ISO_8859_1);
+        String grd = getIniValue(text, "Engine.Engine", "GameRenderDevice");
+        if (grd != null && grd.length() > 0 && !grd.equalsIgnoreCase("VulkanDrv.VulkanRenderDevice"))
+            return "GameRenderDevice=" + grd;
+        String vm = getIniValue(text, "Engine.Engine", "ViewportManager");
+        if (vm != null && vm.length() > 0 && !vm.equalsIgnoreCase("NSDLDrv.NSDLClient"))
+            return "ViewportManager=" + vm;
+        return null;
     }
 
     private static void copyAssetIfMissing(Context context, String asset, File out) {
@@ -384,6 +455,39 @@ final class UnrealDataPaths {
             prefs.edit().putBoolean(KEY, true).apply();
         } catch (Throwable t) {
             Log.w(TAG_CONFIG, "One-time difficulty reset failed: " + t);
+        }
+    }
+
+    // UNREAL_ANDROID_TOUCHLOOK_FIX_V096: one-time config fix for existing installs. Two parts:
+    // (1) Clear bAlwaysMouseLook so touch/right-stick vertical look works. KHG's aim code gates on
+    //     "bAlwaysMouseLook", and this port historically shipped bAlwaysMouseLook=True; we now ship it False
+    //     and hold the free-look modifier bLook natively so vertical touch-look is unchanged (see UnLevTic.cpp
+    //     UNREAL_ANDROID_AUTOAIM_HOLD_BLOOK).
+    // (2) Force MyAutoAim=1 (auto-aim OFF). Retail defaults auto-aim ON; we default it OFF. The in-menu
+    //     "AUTO AIM" switch (OPTIONS MENU item 1) toggles [Engine.PlayerPawn] MyAutoAim between 1 (off) and
+    //     0.93 (on), so this only sets the default; a later in-menu toggle still wins and persists.
+    // Guarded by an app-private flag so it runs once. The flag is versioned (…OffV096) so devices that got an
+    // earlier build's auto-aim-ON rewrite are corrected back to OFF exactly once. Both keys live in
+    // [Engine.PlayerPawn]; setIniValue updates them in place (or adds them if somehow absent).
+    private static void oneTimeTouchLookFixV096(Context context, File systemDir) {
+        try {
+            if (context == null || systemDir == null) return;
+            android.content.SharedPreferences prefs = context.getSharedPreferences("khg_bootstrap", Context.MODE_PRIVATE);
+            final String KEY = "touchLookFixAutoAimOffV096Done";
+            if (prefs.getBoolean(KEY, false)) return; // already done on this install
+            File ini = new File(systemDir, "Unreal.ini");
+            if (ini.isFile()) {
+                String text = new String(Files.readAllBytes(ini.toPath()), StandardCharsets.UTF_8);
+                String updated = setIniValue(text, "Engine.PlayerPawn", "bAlwaysMouseLook", "False");
+                updated = setIniValue(updated, "Engine.PlayerPawn", "MyAutoAim", "1.000000");
+                if (!updated.equals(text)) {
+                    Files.write(ini.toPath(), updated.getBytes(StandardCharsets.UTF_8));
+                    Log.i(TAG_CONFIG, "One-time touch-look fix (bAlwaysMouseLook=False, auto-aim OFF MyAutoAim=1): " + ini.getAbsolutePath());
+                }
+            }
+            prefs.edit().putBoolean(KEY, true).apply();
+        } catch (Throwable t) {
+            Log.w(TAG_CONFIG, "One-time touch-look fix failed: " + t);
         }
     }
 
@@ -474,6 +578,7 @@ final class UnrealDataPaths {
             ensureAndroidControllerDirectPatch(systemDir);
             removeObsoleteStrayInis(systemDir);
             oneTimeDifficultyResetV095(context, systemDir);
+            oneTimeTouchLookFixV096(context, systemDir);
             reconstructSaveSlots(root);
             Log.i(TAG_CONFIG, "Config root: " + root.getAbsolutePath());
             Log.i(TAG_CONFIG, "Config file: " + new File(systemDir, "Unreal.ini").getAbsolutePath());

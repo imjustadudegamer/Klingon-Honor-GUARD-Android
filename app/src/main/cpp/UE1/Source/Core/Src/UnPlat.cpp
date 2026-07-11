@@ -2596,21 +2596,10 @@ void appError( const char* Msg )
 	__android_log_print( ANDROID_LOG_ERROR, "UE1", "appError: %s", Msg ? Msg : "(null)" );
 	if( GErrorHist[0] )
 		__android_log_write( ANDROID_LOG_ERROR, "UE1", GErrorHist );
-	// [KHG Mali diag] Also drop the crash text to an obvious on-device file the reporter can retrieve
-	// (same folder as their game data), and flush the running log so its breadcrumbs are complete on disk.
-	{
-		const char* Root = getenv( "UE1_ANDROID_ROOT" );
-		char CrashPath[1400];
-		snprintf( CrashPath, sizeof(CrashPath), "%s/KHG_CRASH.log", (Root && Root[0]) ? Root : "." );
-		FILE* CrashF = fopen( CrashPath, "w" );
-		if( CrashF )
-		{
-			fprintf( CrashF, "appError: %s\n\n%s\n", Msg ? Msg : "(null)", GErrorHist );
-			fclose( CrashF );
-		}
-		if( GLogFile )
-			fflush( GLogFile );
-	}
+	// [KHG] Flush the running log so its breadcrumbs are complete on disk. The crash text (GErrorHist) is
+	// already in that log and in logcat above — Unreal.log is the single on-disk log file (no KHG_CRASH.log).
+	if( GLogFile )
+		fflush( GLogFile );
 #endif
 #ifdef _DEBUG
 	if( GIsStarted )

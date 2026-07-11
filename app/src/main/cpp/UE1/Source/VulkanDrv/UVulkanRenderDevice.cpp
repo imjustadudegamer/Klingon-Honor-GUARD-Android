@@ -64,6 +64,7 @@ UVulkanRenderDevice::UVulkanRenderDevice()
 	VkDeviceIndex = 0;
 	VkDebug = 0;
 	VkExclusiveFullscreen = 0;
+	UseBindless = 2;        // [KHG compat] Auto: bindless where supported, else the compatibility renderer
 }
 
 void UVulkanRenderDevice::InternalClassInitializer( UClass* Class )
@@ -77,6 +78,7 @@ void UVulkanRenderDevice::InternalClassInitializer( UClass* Class )
 	new(Class, "GlideGamma",       RF_Public) UBoolProperty ( CPP_PROPERTY(GlideGamma),       "Options", CPF_Config );
 	new(Class, "VkDeviceIndex",    RF_Public) UIntProperty  ( CPP_PROPERTY(VkDeviceIndex),    "Options", CPF_Config );
 	new(Class, "VkDebug",          RF_Public) UBoolProperty ( CPP_PROPERTY(VkDebug),          "Options", CPF_Config );
+	new(Class, "UseBindless",      RF_Public) UIntProperty  ( CPP_PROPERTY(UseBindless),      "Options", CPF_Config );
 	unguard;
 }
 
@@ -162,10 +164,9 @@ void UVulkanRenderDevice::RecreateSwapChainForResume()
 	unguard;
 }
 
-// [KHG Mali diag] Breadcrumb logger for the Vulkan bring-up. Writes each sub-step to THREE sinks so a
-// non-technical reporter can retrieve it: (1) logcat "KHGBoot", (2) the engine log Unreal.log (unbuffered,
-// survives a hard SIGSEGV), and (3) a dedicated, obvious file <OBB>/Unreal/KHG_vulkan_boot.log that is
-// fflush+fclose'd every line (so the LAST line before a driver segfault names the exact failing step).
+// [KHG] Breadcrumb logger for the Vulkan bring-up. Writes each sub-step to the single engine log Unreal.log
+// (via debugf) and to logcat tag "KHGBoot" (unbuffered — the last line before a driver segfault names the
+// exact failing step). No separate file: Unreal.log is the one and only on-disk log.
 #ifdef PLATFORM_ANDROID
 #include <android/log.h>
 #include <stdarg.h>
@@ -179,14 +180,44 @@ static void KHGBoot( const char* Fmt, ... )
 	va_end( ap );
 	__android_log_write( ANDROID_LOG_ERROR, "KHGBoot", Buf );
 	debugf( NAME_Log, "[KHGBoot] %s", Buf );
-	const char* Root = getenv( "UE1_ANDROID_ROOT" );
-	char Path[1400];
-	snprintf( Path, sizeof(Path), "%s/KHG_vulkan_boot.log", (Root && Root[0]) ? Root : "." );
-	FILE* F = fopen( Path, "a" );
-	if( F ) { fprintf( F, "%s\n", Buf ); fflush( F ); fclose( F ); }
 }
 #else
 static void KHGBoot( const char*, ... ) {}
+#endif
+
+// [KHG safe-mode] Some older mobile drivers (certain Mali DDKs) SIGSEGV *inside* bindless
+// device/descriptor creation. That fault is uncatchable, so there is no in-process fallback. Instead we
+// drop a marker file for the duration of a bindless bring-up: if a launch finds the marker already there,
+// the previous bindless bring-up crashed before clearing it, so we auto-select the compatibility renderer.
+// The marker lives next to Unreal.ini/Unreal.log in appBaseDir() ("<obb>/Unreal/System/", trailing slash),
+// which is app-writable and persists across launches and app updates.
+#ifdef PLATFORM_ANDROID
+static void KHGSafeModePath( char* Out, size_t OutSize )
+{
+	snprintf( Out, OutSize, "%s.vk_safe_mode", appBaseDir() );
+}
+static bool KHGSafeModeMarkerPresent()
+{
+	char Path[1024]; KHGSafeModePath( Path, sizeof(Path) );
+	FILE* f = fopen( Path, "rb" );
+	if( f ) { fclose( f ); return true; }
+	return false;
+}
+static void KHGSafeModeArm()
+{
+	char Path[1024]; KHGSafeModePath( Path, sizeof(Path) );
+	FILE* f = fopen( Path, "wb" );
+	if( f ) { fputs( "KHG: a bindless Vulkan bring-up is in progress. If this file survives a launch the\nbindless renderer crashed; the compatibility renderer is used instead. Delete this file\n(or set [VulkanDrv.VulkanRenderDevice] UseBindless=1) to retry bindless.\n", f ); fflush( f ); fclose( f ); }
+}
+static void KHGSafeModeClear()
+{
+	char Path[1024]; KHGSafeModePath( Path, sizeof(Path) );
+	remove( Path );
+}
+#else
+static bool KHGSafeModeMarkerPresent() { return false; }
+static void KHGSafeModeArm() {}
+static void KHGSafeModeClear() {}
 #endif
 
 // Instance + Android surface + bindless device + the nine managers.
@@ -293,7 +324,7 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 
 	// [KHG Mali diag] Dump the EXACT driver identity + descriptor-indexing caps/limits. This is what
 	// distinguishes the crash hypotheses: if descriptorBindingSampledImageUpdateAfterBind is enabled=0,
-	// or a UAB limit is < the 16536-wide bindless array we build, an old Mali (r32p1) segfaults building
+	// or a UAB limit is < the 16536-wide bindless array we build, an older Mali segfaults building
 	// the descriptor pool/set. On Adreno the feature is 1 and the limits are huge (so nothing changes).
 	{
 		VkPhysicalDevice pd = Device->PhysicalDevice.Device;
@@ -329,12 +360,58 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 		Device->EnabledFeatures.DescriptorIndexing.descriptorBindingPartiallyBound &&
 		Device->EnabledFeatures.DescriptorIndexing.runtimeDescriptorArray &&
 		Device->EnabledFeatures.DescriptorIndexing.shaderSampledImageArrayNonUniformIndexing;
-	if( !supportsBindless )
+
+	// [KHG compat] Pick the texture path. UseBindless: 0=force compat, 1=force bindless, 2=Auto (default).
+	// The compatibility renderer (four fixed sampler bindings, no descriptor indexing) lets GPUs that lack
+	// bindless run at all — instead of the old hard abort. Bindless stays the default on capable GPUs.
+	if( UseBindless == 1 && !supportsBindless )
 	{
-		debugf( NAME_Warning, "VulkanDrv: GPU lacks bindless textures -> GLES fallback" );
-		KHGBoot( "ABORT: GPU lacks required bindless features (partialBound/runtimeArray/nonUniform) -> return 0" );
-		return 0;
+		// Explicitly forced bindless on a GPU that can't do it: fail with a clear message (not a crash).
+		KHGBoot( "ABORT: UseBindless=1 but GPU lacks descriptor indexing (partialBound/runtimeArray/nonUniform)" );
+		appErrorf( "UseBindless=1 was set, but this GPU's Vulkan driver does not support the descriptor-indexing features the bindless renderer requires. Set UseBindless=0 (or 2/Auto) to use the compatibility renderer." );
 	}
+
+	// [KHG safe-mode] Auto-recover from an unrecoverable bindless crash. If the previous launch armed the
+	// marker (bindless bring-up) and never cleared it, it crashed mid-bring-up, so fall back to compat now.
+	// This only overrides Auto: an explicit UseBindless=1 honours the user's force (and resets the marker),
+	// UseBindless=0 never armed it, and a GPU with no descriptor indexing has no bindless crash to guard.
+	const bool priorBindlessCrash = KHGSafeModeMarkerPresent();
+	if( UseBindless == 0 )
+	{
+		UseBindlessTextures = false;
+		KHGSafeModeClear();                     // not attempting bindless; discard any stale marker
+	}
+	else if( UseBindless == 1 )
+	{
+		UseBindlessTextures = supportsBindless;  // forced (the !supportsBindless case already appErrorf'd)
+		KHGSafeModeClear();                      // explicit user override resets safe-mode
+	}
+	else if( !supportsBindless )
+	{
+		UseBindlessTextures = false;
+		KHGSafeModeClear();                      // GPU can't do bindless at all -> nothing to guard against
+	}
+	else if( priorBindlessCrash )
+	{
+		UseBindlessTextures = false;             // bindless supported, but last attempt crashed -> stay compat
+		KHGBoot( "SAFE MODE: previous bindless bring-up did not complete (marker present) -> forcing COMPATIBILITY renderer. Delete System/.vk_safe_mode or set UseBindless=1 to retry bindless." );
+		// Deliberately keep the marker: every future boot stays on compat until the user overrides, so we
+		// never flip-flop into the same crash again.
+	}
+	else
+	{
+		UseBindlessTextures = true;              // will attempt bindless -> arm the marker before the risky work
+	}
+
+	// Arm the crash marker immediately before the bindless descriptor work (DescriptorSetManager, below). A
+	// SIGSEGV between here and the clear at the end of BringUpVulkan leaves it set for the next launch to see.
+	if( UseBindlessTextures )
+		KHGSafeModeArm();
+
+	debugf( NAME_Log, "VulkanDrv: texture path = %s (UseBindless=%d, supportsBindless=%d, priorCrash=%d)",
+		UseBindlessTextures ? "BINDLESS" : "COMPATIBILITY", (int)UseBindless, (int)supportsBindless, (int)priorBindlessCrash );
+	KHGBoot( "texture path = %s (UseBindless=%d supportsBindless=%d priorCrash=%d)",
+		UseBindlessTextures ? "BINDLESS" : "COMPATIBILITY", (int)UseBindless, (int)supportsBindless, (int)priorBindlessCrash );
 
 	const auto& props = Device->PhysicalDevice.Properties.Properties;
 	debugf( NAME_Log, "VulkanDrv: device '%s' api %d.%d.%d maxTex=%d", props.deviceName,
@@ -351,6 +428,11 @@ UBOOL UVulkanRenderDevice::BringUpVulkan()
 	KHGBoot( "step 4: construct DescriptorSetManager (bindless UpdateAfterBind pool <-- prime suspect)" ); DescriptorSets.reset( new DescriptorSetManager( this ) );
 	KHGBoot( "step 4: construct RenderPassManager (eager bloom pipeline)" ); RenderPasses.reset( new RenderPassManager( this ) );
 	KHGBoot( "step 4: construct FramebufferManager (eager present pipeline)" ); Framebuffers.reset( new FramebufferManager( this ) );
+
+	// [KHG safe-mode] Bindless bring-up (incl. the DescriptorSetManager UpdateAfterBind pool) completed without
+	// crashing -> clear the marker so the next launch isn't mistaken for a crash. No-op on the compat path.
+	if( UseBindlessTextures )
+		KHGSafeModeClear();
 
 	KHGBoot( "BringUpVulkan: ALL 9 MANAGERS OK -> return 1 (SUCCESS - Vulkan is up)" );
 	return 1;
@@ -424,7 +506,8 @@ void UVulkanRenderDevice::Exit()
 
 void UVulkanRenderDevice::SubmitAndWait( bool present, int presentWidth, int presentHeight, bool presentFullscreen )
 {
-	DescriptorSets->UpdateBindlessSet();
+	if( UseBindlessTextures )
+		DescriptorSets->UpdateBindlessSet();   // compat path writes its sets at creation, not per-frame
 	Commands->SubmitCommands( present, presentWidth, presentHeight, presentFullscreen );
 
 	Batch.SceneIndexStart = 0;
@@ -628,6 +711,7 @@ void UVulkanRenderDevice::Unlock( UBOOL Blit )
 		SubmitAndWait( Blit ? true : false, windowWidth, windowHeight, false );
 
 		Batch.Pipeline = nullptr;
+		Batch.TextureSet = nullptr;   // [KHG compat] force a rebind of the per-combo set on the next frame's first draw
 
 		if( Samplers->LODBias != LODBias )
 		{
@@ -701,7 +785,12 @@ void UVulkanRenderDevice::DrawBatch( VulkanCommandBuffer* cmdbuffer )
 
 		auto layout = RenderPasses->Scene.BindlessPipelineLayout.get();
 		cmdbuffer->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, Batch.Pipeline->Pipeline.get());
-		cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, DescriptorSets->GetBindlessSet());
+		// [KHG compat] Bindless binds one global runtime-indexed set; the compatibility path binds the
+		// per-combo set selected for this batch (guaranteed non-null once a draw has accumulated indices).
+		if( UseBindlessTextures )
+			cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, DescriptorSets->GetBindlessSet());
+		else if( Batch.TextureSet )
+			cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, Batch.TextureSet);
 		cmdbuffer->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScenePushConstants), &pushconstants);
 		cmdbuffer->drawIndexed(icount, 1, Batch.SceneIndexStart, 0, 0);
 		Batch.SceneIndexStart = SceneIndexPos;
@@ -802,7 +891,14 @@ void UVulkanRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo& S
 
 	SetPipeline( RenderPasses->GetPipeline(PolyFlags) );
 
-	ivec4 textureBinds = GetTextureIndexes(PolyFlags, tex, lightmap, macrotex, detailtex);
+	ivec4 textureBinds;
+	if( UseBindlessTextures )
+		textureBinds = GetTextureIndexes(PolyFlags, tex, lightmap, macrotex, detailtex);
+	else
+	{
+		textureBinds = ivec4(0, 0, 0, 0);   // unused by the compatibility shader (fixed sampler bindings)
+		SetTextureSet( DescriptorSets->GetCompatTextureSet(PolyFlags, tex, lightmap, macrotex, detailtex, false) );
+	}
 	vec4 color(1.0f);
 
 	for( FSavedPoly* Poly = Facet.Polys; Poly; Poly = Poly->Next )
@@ -870,7 +966,14 @@ void UVulkanRenderDevice::DrawGouraudPolygon( FSceneNode* Frame, FTextureInfo& I
 	SetPipeline( RenderPasses->GetPipeline(PolyFlags) );
 
 	CachedTexture* tex = Textures->GetTexture(&Info, !!(PolyFlags & PF_Masked));
-	ivec4 textureBinds = GetTextureIndexes(PolyFlags, tex);
+	ivec4 textureBinds;
+	if( UseBindlessTextures )
+		textureBinds = GetTextureIndexes(PolyFlags, tex);
+	else
+	{
+		textureBinds = ivec4(0, 0, 0, 0);
+		SetTextureSet( DescriptorSets->GetCompatTextureSet(PolyFlags, tex, nullptr, nullptr, nullptr, false) );
+	}
 
 	float UMult = GetUMult(Info);
 	float VMult = GetVMult(Info);
@@ -977,7 +1080,14 @@ void UVulkanRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Info, FLOAT
 	bool clamp = (u0 >= 0.0f && u1 <= 1.00001f && v0 >= 0.0f && v1 <= 1.00001f);
 
 	SetPipeline( RenderPasses->GetPipeline(PolyFlags) );
-	ivec4 textureBinds = GetTextureIndexes(PolyFlags, tex, clamp);
+	ivec4 textureBinds;
+	if( UseBindlessTextures )
+		textureBinds = GetTextureIndexes(PolyFlags, tex, clamp);
+	else
+	{
+		textureBinds = ivec4(0, 0, 0, 0);
+		SetTextureSet( DescriptorSets->GetCompatTextureSet(PolyFlags, tex, nullptr, nullptr, nullptr, clamp) );
+	}
 
 	float r, g, b, a;
 	if( PolyFlags & PF_Modulated )
@@ -1048,7 +1158,14 @@ void UVulkanRenderDevice::Draw2DLine( FSceneNode* Frame, FPlane Color, DWORD Lin
 		UpdateSceneNode( Frame );
 
 	SetPipeline( RenderPasses->GetLinePipeline(false) );
-	ivec4 textureBinds = GetTextureIndexes(PF_Highlighted, nullptr);
+	ivec4 textureBinds;
+	if( UseBindlessTextures )
+		textureBinds = GetTextureIndexes(PF_Highlighted, nullptr);
+	else
+	{
+		textureBinds = ivec4(0, 0, 0, 0);
+		SetTextureSet( DescriptorSets->GetCompatTextureSet(PF_Highlighted, nullptr, nullptr, nullptr, nullptr, false) );
+	}
 	vec4 color = ApplyInverseGamma( vec4(Color.X, Color.Y, Color.Z, 1.0f) );
 
 	auto alloc = ReserveVertices(2, 2);
@@ -1080,7 +1197,14 @@ void UVulkanRenderDevice::Draw2DPoint( FSceneNode* Frame, FPlane Color, DWORD Li
 
 	const FLOAT Z = 1.0f;   // 219 Draw2DPoint has no Z param; points are 2D overlay
 	SetPipeline( RenderPasses->GetPointPipeline(false) );
-	ivec4 textureBinds = GetTextureIndexes(PF_Highlighted, nullptr);
+	ivec4 textureBinds;
+	if( UseBindlessTextures )
+		textureBinds = GetTextureIndexes(PF_Highlighted, nullptr);
+	else
+	{
+		textureBinds = ivec4(0, 0, 0, 0);
+		SetTextureSet( DescriptorSets->GetCompatTextureSet(PF_Highlighted, nullptr, nullptr, nullptr, nullptr, false) );
+	}
 	vec4 color = ApplyInverseGamma( vec4(Color.X, Color.Y, Color.Z, 1.0f) );
 
 	auto alloc = ReserveVertices(4, 6);
@@ -1190,6 +1314,8 @@ void UVulkanRenderDevice::EndFlash()
 		pushconstants.nearClip = vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
 		SetPipeline( RenderPasses->GetEndFlashPipeline() );
+		if( !UseBindlessTextures )
+			SetTextureSet( DescriptorSets->GetCompatTextureSet(0, nullptr, nullptr, nullptr, nullptr, false) );
 
 		auto alloc = ReserveVertices(4, 6);
 		if( alloc.vptr )

@@ -58,6 +58,11 @@ void UploadManager::UploadTexture(CachedTexture* tex, const FTextureInfo& Info, 
 		renderer->Commands->GetCurrentDeleteList()->images.push_back(std::move(tex->image));
 		for (int& bi : tex->BindlessIndex)
 			bi = -1;
+		// [KHG compat] The non-bindless texture cache is keyed by image-VIEW pointer; the old view is now
+		// on the delete list. Drop the compat cache so no entry (or a later pointer-reused address) resolves
+		// to a set referencing the freed view. No-op in bindless mode. See DescriptorSetManager::ClearCompatCache.
+		if (renderer->DescriptorSets)
+			renderer->DescriptorSets->ClearCompatCache();
 		tex->imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	}
 

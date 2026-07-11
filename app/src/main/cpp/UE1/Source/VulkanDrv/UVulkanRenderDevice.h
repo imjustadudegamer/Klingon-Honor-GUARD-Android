@@ -85,6 +85,15 @@ class DLL_EXPORT UVulkanRenderDevice : public URenderDevice
 	INT      VkDeviceIndex;
 	BITFIELD VkDebug;
 	BITFIELD VkExclusiveFullscreen;
+	// [KHG compat] Texture path selection. 0 = force non-bindless compatibility renderer, 1 = force bindless
+	// (fail cleanly if the GPU lacks descriptor indexing), 2 = Auto (default): bindless when supported, else
+	// the compatibility renderer. Resolved to UseBindlessTextures at device bring-up.
+	INT      UseBindless;
+
+	// [KHG compat] Effective, resolved at BringUpVulkan: true = bindless (runtime-indexed sampler array),
+	// false = non-bindless compatibility path (4 fixed sampler bindings per draw). Read by ShaderManager,
+	// DescriptorSetManager, RenderPassManager and DrawBatch to pick the pipeline layout / descriptor strategy.
+	bool     UseBindlessTextures = true;
 
 	void  RunBloomPass();
 	void  BloomStep( VulkanCommandBuffer* cmdbuffer, VulkanPipeline* pipeline, VulkanDescriptorSet* input, VulkanFramebuffer* output, int width, int height, const BloomPushConstants& pushconstants );
@@ -154,6 +163,16 @@ private:
 			Batch.Pipeline = pipeline;
 		}
 	}
+	// [KHG compat] Non-bindless path only: break the batch when the bound texture set changes (bindless
+	// packs per-vertex indices instead, so one batch spans many textures). No-op in bindless mode.
+	void SetTextureSet( VulkanDescriptorSet* set )
+	{
+		if( set != Batch.TextureSet )
+		{
+			DrawBatch( Commands->GetDrawCommands() );
+			Batch.TextureSet = set;
+		}
+	}
 	ivec4 GetTextureIndexes( DWORD PolyFlags, CachedTexture* tex, bool clamp = false )
 	{
 		return ivec4( DescriptorSets->GetTextureArrayIndex( PolyFlags, tex, clamp ), 0, 0, 0 );
@@ -184,7 +203,7 @@ private:
 	// ColorBuffer directly (the ColorBuffer->PPImage blit was skipped — no MSAA resolve, no bloom).
 	bool  PresentFromColorBuffer = false;
 
-	struct { size_t SceneIndexStart = 0; PipelineState* Pipeline = nullptr; } Batch;
+	struct { size_t SceneIndexStart = 0; PipelineState* Pipeline = nullptr; VulkanDescriptorSet* TextureSet = nullptr; } Batch;
 	ScenePushConstants pushconstants;
 
 	std::array<size_t, MAX_FRAMES_IN_FLIGHT> SceneVertexPositions = { 0 };

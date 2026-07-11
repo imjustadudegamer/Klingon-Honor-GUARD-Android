@@ -49,6 +49,105 @@ struct FActorPriority
 	}
 };
 
+#ifdef PLATFORM_ANDROID // UNREAL_ANDROID_AIM_ASSIST_V096
+/*-----------------------------------------------------------------------------
+	[KHG] Soft aim-assist (view magnetism) for the touch port.
+
+	Retail KHG "AUTO AIM" (OPTIONS menu item 1) is only a subtle *vertical* projectile correction for ranged
+	weapons and never rotates the player, so on a touch device it is imperceptible and does nothing horizontally.
+	This adds a gentle two-axis magnetism: while the player is firing AND the in-menu AUTO AIM switch is on
+	(MyAutoAim<1 -- the same switch, so the menu still turns this on/off), rotate ViewRotation a little toward
+	the best enemy in a forward cone. Because every weapon fires along ViewRotation, this helps both vertical and
+	horizontal aim. Target rules mirror the native PickTarget (alive, bProjTarget, in front, in range, line of
+	sight). It is a soft, capped, frame-rate-independent pull -- never a hard snap. All feel knobs are read once
+	from [KHG.AimAssist] in Unreal.ini so they can be tuned on-device without a rebuild.
+-----------------------------------------------------------------------------*/
+struct FKHGAimAssistCfg
+{
+	UBOOL Loaded, Enabled, RequireFiring;
+	FLOAT Rate;        // exponential approach rate (1/sec); higher = snappier
+	FLOAT MinDot;      // acquisition cone as cos(half-angle); 0.90 ~= 25.8 deg
+	FLOAT RangeSq;     // max target distance, squared (world units)
+	FLOAT MaxUUPerSec; // hard cap on pull speed, in UE rotation units/sec (65536 == 360 deg)
+};
+static FKHGAimAssistCfg GKHGAim = { 0, 0, 0, 0.f, 0.f, 0.f, 0.f };
+
+static FLOAT KHGAimCfg( const char* Key, FLOAT Def )
+{
+	char Buf[64];
+	if( GConfigCache.GetString( "KHG.AimAssist", Key, Buf, sizeof(Buf) ) && Buf[0] )
+		return appAtof( Buf );
+	return Def;
+}
+
+static void KHGApplyAimAssist( APlayerPawn* P, FLOAT DeltaSeconds )
+{
+	guardSlow(KHGApplyAimAssist);
+	if( !GKHGAim.Loaded )
+	{
+		GKHGAim.Enabled       = KHGAimCfg( "Enabled", 1.f ) != 0.f;
+		GKHGAim.RequireFiring = KHGAimCfg( "RequireFiring", 0.f ) != 0.f; // 0 = assist always (walking too)
+		GKHGAim.Rate       = KHGAimCfg( "Rate", 8.f );
+		GKHGAim.MinDot     = KHGAimCfg( "MinDot", 0.88f );
+		FLOAT Range        = KHGAimCfg( "Range", 3500.f );
+		GKHGAim.RangeSq    = Range * Range;
+		GKHGAim.MaxUUPerSec= KHGAimCfg( "MaxDegPerSec", 80.f ) * ( 65536.f / 360.f );
+		GKHGAim.Loaded     = 1;
+	}
+
+	// Active whenever the menu AUTO AIM switch is on, in normal play. By default it assists all the time (while
+	// just walking around too, not only while firing); set [KHG.AimAssist] RequireFiring=1 to gate on firing.
+	if( !GKHGAim.Enabled || DeltaSeconds <= 0.f )   return;
+	if( P->MyAutoAim >= 1.f )                        return; // menu "AUTO AIM" = off
+	if( GKHGAim.RequireFiring && !P->bFire && !P->bAltFire ) return; // (opt-in) only while firing/attacking
+	if( P->bShowMenu || P->Health <= 0 )             return;
+	if( !P->GetLevel() || !P->GetLevel()->GetLevelInfo() ) return;
+
+	const FVector EyeLoc  = P->Location + FVector( 0.f, 0.f, P->EyeHeight );
+	const FVector FireDir = P->ViewRotation.Vector(); // unit
+
+	// Pick the most-aligned valid target in the cone (same rules as APawn::execPickTarget).
+	APawn* Best   = NULL;
+	FLOAT  BestDot= GKHGAim.MinDot;
+	FVector BestAim( 0.f, 0.f, 0.f );
+	for( APawn* N = P->GetLevel()->GetLevelInfo()->PawnList; N; N = N->nextPawn )
+	{
+		if( N == P || N->Health <= 0 || !N->bProjTarget ) continue;
+		FVector Aim = N->Location + FVector( 0.f, 0.f, 0.3f * N->CollisionHeight ); // chest; matches retail vert
+		FVector To  = Aim - EyeLoc;
+		FLOAT   Raw = FireDir | To;
+		if( Raw <= 0.f ) continue;                        // behind the player
+		FLOAT   DistSq = To.SizeSquared();
+		if( DistSq > GKHGAim.RangeSq || DistSq <= 1.f ) continue;
+		FLOAT   Dot = Raw / appSqrt( DistSq );
+		if( Dot > BestDot && P->LineOfSightTo( N ) )
+		{
+			BestDot = Dot;
+			Best    = N;
+			BestAim = Aim;
+		}
+	}
+	if( !Best ) return;
+
+	// Shortest-arc signed deltas toward the target, in UE rotation units (65536 == 360 deg).
+	const FRotator Desired = ( BestAim - EyeLoc ).Rotation();
+	INT dYaw   = ( ( Desired.Yaw   - P->ViewRotation.Yaw   ) & 0xFFFF ); if( dYaw   > 32768 ) dYaw   -= 65536;
+	INT dPitch = ( ( Desired.Pitch - P->ViewRotation.Pitch ) & 0xFFFF ); if( dPitch > 32768 ) dPitch -= 65536;
+
+	// Soft, capped approach: never overshoots the target, never exceeds the max pull speed.
+	const FLOAT Alpha   = 1.f - (FLOAT)appExp( -GKHGAim.Rate * DeltaSeconds );
+	const INT   MaxStep = (INT)( GKHGAim.MaxUUPerSec * DeltaSeconds );
+	INT StepYaw   = (INT)( dYaw   * Alpha );
+	INT StepPitch = (INT)( dPitch * Alpha );
+	if( StepYaw   >  MaxStep ) StepYaw   =  MaxStep; else if( StepYaw   < -MaxStep ) StepYaw   = -MaxStep;
+	if( StepPitch >  MaxStep ) StepPitch =  MaxStep; else if( StepPitch < -MaxStep ) StepPitch = -MaxStep;
+
+	P->ViewRotation.Yaw   += StepYaw;
+	P->ViewRotation.Pitch += StepPitch;
+	unguardSlow;
+}
+#endif
+
 /*-----------------------------------------------------------------------------
 	Tick a single actor.
 -----------------------------------------------------------------------------*/
@@ -256,8 +355,31 @@ UBOOL AActor::Tick( FLOAT DeltaSeconds, ELevelTick TickType )
 
 			// Process PlayerTick with input.
 			PlayerPawn->Player->ReadInput( DeltaSeconds );
+#ifdef PLATFORM_ANDROID // UNREAL_ANDROID_AUTOAIM_HOLD_BLOOK
+			// [KHG auto-aim] The retail projectile auto-aim in (Klingon)Weapons.WeaponAdjustAim / PlayerPawn.
+			// AdjustAim is gated OFF whenever bAlwaysMouseLook is true (see PlayerPawn.uc: the gate is
+			// "Difficulty>2 || bAlwaysMouseLook || MyAutoAim>=1"). We ship bAlwaysMouseLook=False so that middle
+			// term goes false, and auto-aim OFF by default (MyAutoAim=1); the OPTIONS -> AUTO AIM switch sets
+			// MyAutoAim<1 to enable the game's own PickTarget-based assist. Clearing bAlwaysMouseLook is only for
+			// look, not auto-aim: PlayerInput (PlayerPawn.uc:1508) only routes mouse-Y -> pitch when (bAlwaysMouseLook ||
+			// bLook), and the right-stick/touch look is injected as mouse-Y; so with mouselook off we must hold
+			// the free-look modifier bLook=1 here, every frame, right after ReadInput clears/updates input and
+			// before eventPlayerInput reads it. That keeps vertical look byte-identical (and, because the pitch
+			// snap-back at PlayerPawn.uc:2288 is guarded by bLook==0, leaves it inert exactly as today) while the
+			// aim gate stays open. Gated on !bAlwaysMouseLook so a user who re-enables mouselook keeps the retail
+			// mouselook-player semantics (precise aim, no assist) and we never touch their input state.
+			if( !PlayerPawn->bAlwaysMouseLook )
+				PlayerPawn->bLook = 1;
+#endif
 			PlayerPawn->eventPlayerInput( DeltaSeconds );
 			PlayerPawn->eventPlayerTick( DeltaSeconds );
+#ifdef PLATFORM_ANDROID // UNREAL_ANDROID_AIM_ASSIST_V096
+			// [KHG] Soft two-axis aim magnetism, applied after UpdateRotation (in eventPlayerTick) has set the
+			// frame's ViewRotation and before the weapon actor fires later in this tick pass, so the shot follows
+			// the assisted aim. Gated on the in-menu AUTO AIM switch; assists all the time by default (walking
+			// too), or only while firing if [KHG.AimAssist] RequireFiring=1. See KHGApplyAimAssist.
+			KHGApplyAimAssist( PlayerPawn, DeltaSeconds );
+#endif
 			PlayerPawn->Player->ReadInput( 0.0 );
 		}
 

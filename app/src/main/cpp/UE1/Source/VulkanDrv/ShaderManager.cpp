@@ -24,10 +24,23 @@ ShaderManager::ShaderManager(UVulkanRenderDevice* renderer) : renderer(renderer)
 {
 	VulkanDevice* dev = renderer->Device.get();
 
-	// Bindless scene shaders = the OpenGL 1:1 math (base*color, *lightmap*2 overbright, macro/detail/fog).
-	Scene.VertexShader            = MakeShader(dev, g_SceneVertSpv,       sizeof(g_SceneVertSpv),       "Scene.vert");
-	Scene.FragmentShader          = MakeShader(dev, g_SceneFragSpv,       sizeof(g_SceneFragSpv),       "Scene.frag");
-	Scene.FragmentShaderAlphaTest = MakeShader(dev, g_SceneFragMaskedSpv, sizeof(g_SceneFragMaskedSpv), "Scene.frag(masked)");
+	// Scene shaders = the OpenGL 1:1 math (base*color, *lightmap*2 overbright, macro/detail/fog). Two
+	// variants share the same Scene.* slots so RenderPassManager is agnostic to which is loaded:
+	//   - BINDLESS (default, descriptor-indexing GPUs): one runtime-indexed sampler array + nonuniformEXT.
+	//   - COMPATIBILITY (GPUs without descriptor indexing): four fixed sampler bindings, SPIR-V 1.0.
+	// Selection is fixed at device bring-up (renderer->UseBindlessTextures); see UVulkanRenderDevice.
+	if (renderer->UseBindlessTextures)
+	{
+		Scene.VertexShader            = MakeShader(dev, g_SceneVertSpv,       sizeof(g_SceneVertSpv),       "Scene.vert");
+		Scene.FragmentShader          = MakeShader(dev, g_SceneFragSpv,       sizeof(g_SceneFragSpv),       "Scene.frag");
+		Scene.FragmentShaderAlphaTest = MakeShader(dev, g_SceneFragMaskedSpv, sizeof(g_SceneFragMaskedSpv), "Scene.frag(masked)");
+	}
+	else
+	{
+		Scene.VertexShader            = MakeShader(dev, g_SceneCompatVertSpv,       sizeof(g_SceneCompatVertSpv),       "SceneCompat.vert");
+		Scene.FragmentShader          = MakeShader(dev, g_SceneCompatFragSpv,       sizeof(g_SceneCompatFragSpv),       "SceneCompat.frag");
+		Scene.FragmentShaderAlphaTest = MakeShader(dev, g_SceneCompatFragMaskedSpv, sizeof(g_SceneCompatFragMaskedSpv), "SceneCompat.frag(masked)");
+	}
 
 	// Present (fullscreen blit + gamma/dither): single baked variant (D3D9 gamma, colorcorrect mode 0) shared by all 16 slots since the gamma/colour-correct mode matrix isn't exposed.
 	Postprocess.VertexShader = MakeShader(dev, g_PPStepVertSpv, sizeof(g_PPStepVertSpv), "PPStep.vert");

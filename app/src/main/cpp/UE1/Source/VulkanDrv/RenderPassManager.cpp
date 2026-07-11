@@ -81,10 +81,16 @@ void RenderPassManager::SavePipelineCache()
 
 void RenderPassManager::CreateSceneBindlessPipelineLayout()
 {
+	// [KHG compat] This is the scene pipeline layout for BOTH paths. Its single descriptor set (set 0) is the
+	// bindless runtime-indexed array on capable GPUs, or the fixed 4-binding compatibility layout otherwise.
+	// The push-constant range (ScenePushConstants, vertex stage) is identical either way.
+	VulkanDescriptorSetLayout* set0 = renderer->UseBindlessTextures
+		? renderer->DescriptorSets->GetTextureBindlessLayout()
+		: renderer->DescriptorSets->GetCompatTextureLayout();
 	Scene.BindlessPipelineLayout = PipelineLayoutBuilder()
-		.AddSetLayout(renderer->DescriptorSets->GetTextureBindlessLayout())
+		.AddSetLayout(set0)
 		.AddPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScenePushConstants))
-		.DebugName("SceneBindlessPipelineLayout")
+		.DebugName("ScenePipelineLayout")
 		.Create(renderer->Device.get());
 }
 
